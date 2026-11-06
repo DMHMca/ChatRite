@@ -7,6 +7,7 @@ Read this first, then `HANDOVER.md` (the full history, decisions, current state 
 - The owner has very little coding experience. Explain in plain English and give step-by-step instructions for anything they must do, saying exactly what they should see on screen.
 - British English. Short, practical, direct prose. Prefer prose to bullet lists.
 - Always give web addresses as CLICKABLE markdown links with the full address and a few words on what each opens.
+- They often work on a Surface tablet or phone where copying is hard: give every command or text to copy as its own fenced code block, one per command.
 - Never ask them to paste secrets into chat. API keys go in through the tool's own dialog or Windows Credential Manager.
 - They often dictate by speech-to-text, so messages can be garbled. When a request is ambiguous or they are thinking aloud, first restate in one or two sentences what you understand and wait for a yes. When it is clear ("build X", "yes, go ahead"), just do it. Never remove or rename something they have not clearly asked you to.
 - Get something operational and let real use be the test. No elaborate test suites. Say honestly what was and was not tested.
