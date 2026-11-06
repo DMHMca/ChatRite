@@ -1,0 +1,16 @@
+; Lives at %APPDATA%\ChatRite\dictate.ini on the PC (tray ring menu: Settings file). Every key is optional.
+[dictate]
+; Claude's desktop app uses Ctrl+Alt+Space for its quick-entry bar, so choose another key.
+hotkey = ctrl+alt+m
+model = large-v3-turbo
+silence_ms = 600
+idle_timeout_s = 90
+threshold = 0
+microphone =
+beeps = yes
+; yes = let Whisper add full stops and commas at every pause (not recommended)
+auto_stops = no
+; yes = the local model decides where sentences end at each pause. Slower and not always right.
+smart_stops = no
+; after you say "polish", wait this long before typing again
+polish_wait_s = 5

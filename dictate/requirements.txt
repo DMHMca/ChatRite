@@ -1,0 +1,8 @@
+faster-whisper
+sounddevice
+numpy
+pystray
+pillow
+keyboard
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*

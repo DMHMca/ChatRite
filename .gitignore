@@ -1,0 +1,23 @@
+# Never commit these. This repository is public.
+docs/
+*.zip
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.log
+*-log.txt
+*-console.txt
+dictate.ini
+settings.ini
+vocabulary.txt
+polish.now
+.env
+.env.*
+*.key
+*.pem
+*.token
+*secret*
+*.before-*
+*.previous.*
+hk_*.txt

@@ -1,0 +1,10 @@
+; Your words and names, one per line. Lines starting with a semicolon are ignored.
+; To say what the recogniser often gets wrong, write:  heard => meant
+; This file lives at %APPDATA%\ChatRite\vocabulary.txt on the PC (tray menu: Edit my words and names).
+Codex
+Chrome
+Claude
+ChatGPT
+Samarkand
+Kodak's => Codex
+crime => Chrome

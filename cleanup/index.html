@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChatRite: set up on your PC</title>
+<style>
+:root{--bg:#F3F4F2;--text:#1B1F1D;--muted:#555;--accent:#234E70;--card:#fff;--line:#d9dcd8}
+@media (prefers-color-scheme:dark){:root{--bg:#121513;--text:#ECEFEC;--muted:#aab;--accent:#8fb8de;--card:#1c201d;--line:#333}}
+body{margin:0;background:var(--bg);color:var(--text);font:18px/1.55 "Atkinson Hyperlegible",system-ui,sans-serif;padding:20px 16px 48px}
+main{max-width:40rem;margin:0 auto}
+h1{font-size:1.6rem;color:var(--accent);margin:0 0 .3rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+.card h2{font-size:1.1rem;margin:0 0 .4rem}
+a.btn{display:inline-block;background:var(--accent);color:var(--bg);text-decoration:none;border-radius:10px;padding:12px 18px;margin:6px 8px 6px 0;font-weight:700}
+p{margin:.4rem 0}
+.m{color:var(--muted);font-size:.95rem}
+</style>
+</head>
+<body>
+<main>
+<h1>ChatRite</h1>
+<p>Press <b>Ctrl+Shift+Space</b> in any text box and it fixes speech-to-text mistakes (whole or hole, Codex or Kodak's, doubled words) using a language model that runs on your own PC. Nothing leaves the PC. Press <b>Ctrl+Shift+Alt+Space</b> to <b>polish</b> a whole passage instead: it adds the full stops, commas and capitals dictation leaves out, without rewording. If the model changes too many words, nothing is replaced. It updates itself.</p>
+
+<div class="card"><h2>1. Install AutoHotkey (once)</h2>
+<p>Download the version 2 installer and run it with the standard options.</p>
+<a class="btn" href="https://www.autohotkey.com/download/">AutoHotkey download page</a></div>
+
+<div class="card"><h2>2. Install Ollama (once)</h2>
+<p>This runs the language model on your graphics card. Run the installer. It then sits by the clock.</p>
+<a class="btn" href="https://ollama.com/download/windows">Ollama for Windows</a></div>
+
+<div class="card"><h2>3. Get the tidy script (once)</h2>
+<p>Download it and double-click it. Chrome may say the file is uncommon: choose Keep. The first time, it offers to download the language model (a few gigabytes) and puts itself in Windows Startup.</p>
+<a class="btn" href="cleanup.ahk?v=10" download="cleanup.ahk">Download cleanup.ahk</a>
+<p class="m">After that, right-click its icon by the clock and choose <b>Try it on a sample sentence</b>. It tells you how long it took.</p></div>
+
+<p class="m">Updates arrive by themselves from this page. Your own words and names are in the vocabulary file (tray menu: Edit my words and names).</p>
+</main>
+</body>
+</html>
