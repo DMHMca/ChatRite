@@ -123,7 +123,7 @@ def parse_command(text):
 
 NOISES = set("ahem hmm hm mm mmm mhm um uh er erm ah huh cough coughs coughing sniff sniffs sigh sighs laughs laughter music applause".split())
 KEEP_CAPITAL = set("monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december".split())
-SPOKEN = [(r"full stop", "."), (r"comma", ","), (r"question mark", "?"), (r"exclamation (?:mark|point)", "!")]
+SPOKEN = [(r"full stop", "."), (r"comma", ","), (r"semi[\s-]?colon", ";"), (r"colon", ":"), (r"question mark", "?"), (r"exclamation (?:mark|point)", "!")]
 
 
 OLLAMA = "http://127.0.0.1:11434"
