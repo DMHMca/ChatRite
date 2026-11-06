@@ -3,7 +3,7 @@
 Runs on your own PC (Whisper on the graphics card). Nothing is sent anywhere except the one-off model download
 and a check for updates on GitHub Pages. Hotkey (default Ctrl+Alt+M) switches listening on and off.
 """
-VERSION = 11
+VERSION = 12
 
 import os
 import json
@@ -20,7 +20,7 @@ from collections import deque
 APP = "ChatRite"
 DATA = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP)
 INSTALL = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP, "dictate")
-UPDATE_URL = "https://dmhmca.github.io/get-a-grip/dictate/"
+UPDATE_URL = "https://dmhmca.github.io/ChatRite/dictate/"
 INI = os.path.join(DATA, "dictate.ini")
 VOCAB = os.path.join(DATA, "vocabulary.txt")
 LOG = os.path.join(DATA, "dictate-log.txt")

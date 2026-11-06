@@ -5,10 +5,10 @@ CoordMode("ToolTip", "Screen")
 
 ; ChatRite: fixes speech-to-text mistakes (whole/hole, Kodak's/Codex ...) in the text box you are in.
 ; Press Ctrl+Shift+Space. It uses a language model running on THIS PC (Ollama). Nothing leaves the PC.
-; This file is kept up to date automatically from https://dmhmca.github.io/get-a-grip/cleanup/
-VERSION := 11
+; This file is kept up to date automatically from https://dmhmca.github.io/ChatRite/cleanup/
+VERSION := 12
 
-UpdateUrl := "https://dmhmca.github.io/get-a-grip/cleanup/"
+UpdateUrl := "https://dmhmca.github.io/ChatRite/cleanup/"
 InstallDir := EnvGet("LOCALAPPDATA") "\ChatRite"
 DataDir := EnvGet("APPDATA") "\ChatRite"
 IniFile := DataDir "\settings.ini"
@@ -660,7 +660,7 @@ InstallDictate() {
         } else
             Say("2. The private Python environment already exists.")
         Say("3. Downloading the programs it needs (about 1 GB, the slow part) ...")
-        RunLine('curl.exe -s --max-time 30 -o "' dir '\requirements.txt" "https://dmhmca.github.io/get-a-grip/dictate/requirements.txt?t=' A_Now '"', A_Temp "\chatrite-req.txt")
+        RunLine('curl.exe -s --max-time 30 -o "' dir '\requirements.txt" "https://dmhmca.github.io/ChatRite/dictate/requirements.txt?t=' A_Now '"', A_Temp "\chatrite-req.txt")
         if !FileExist(dir "\requirements.txt")
             throw Error("Could not download the list of programs to install.")
         RunLogged('"' vpy '" -m pip install --upgrade pip --progress-bar off', A_Temp "\chatrite-pip0.txt", Say)
@@ -669,7 +669,7 @@ InstallDictate() {
         if !InStr(chk, "ok")
             throw Error("Some programs did not install. The last message was: " SubStr(chk, -300))
         Say("4. Downloading ChatRite Dictate itself ...")
-        RunLine('curl.exe -s --max-time 30 -o "' dir '\dictate.py" "https://dmhmca.github.io/get-a-grip/dictate/dictate.py?t=' A_Now '"', A_Temp "\chatrite-dl.txt")
+        RunLine('curl.exe -s --max-time 30 -o "' dir '\dictate.py" "https://dmhmca.github.io/ChatRite/dictate/dictate.py?t=' A_Now '"', A_Temp "\chatrite-dl.txt")
         if (!FileExist(dir "\dictate.py") || !InStr(FileRead(dir "\dictate.py", "UTF-8"), "CHATRITE-DICTATE-END"))
             throw Error("Could not download ChatRite Dictate.")
         FileCreateShortcut(pyw, A_Startup "\ChatRite Dictate.lnk", dir, '"' dir '\dictate.py"')
