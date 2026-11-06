@@ -251,6 +251,8 @@ class Output:
             text = re.sub(r"[\s.,;:?]+$", "", text)
         for words, mark in SPOKEN:
             text = re.sub(r"[\s,.]*\b" + words + r"\b[.,]?", mark, text, flags=re.I)
+        # "period" is a common word, so it only counts as punctuation when it ends the phrase
+        text = re.sub(r"[\s,.]*\bperiod\s*[.,]?$", ".", text, flags=re.I)
         text = re.sub(r"([.,?!;:])(?=[A-Za-z])", r"\1 ", text)
         text = re.sub(r"([.?!]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
         text = text.strip()
@@ -261,6 +263,7 @@ class Output:
         words = normalise(text).split()
         if words and all(w in NOISES for w in words):
             return ""
+        sentence_start = bool(self.last) and (self.last.endswith("\n") or bool(re.search(r"[.?!][\"')\]]*$", self.last)))
         if self.last and not self.last.endswith("\n"):
             ended = re.search(r"[.?!][\"')\]]*$", self.last)
             if not ended and not re.search(r"[,;:]$", self.last) and self.boundary and not self.auto_stops:
@@ -278,6 +281,9 @@ class Output:
                     text = text[0].lower() + text[1:]
             if text[0] not in ".,?!;:":
                 text = " " + text
+        # a new sentence or a new line starts with a capital, whatever the speech engine gave us
+        if sentence_start:
+            text = re.sub(r"[A-Za-z]", lambda m: m.group(0).upper(), text, count=1) if re.match(r"\s*[A-Za-z]", text) else text
         self.last = text.strip()
         return text
 
