@@ -40,7 +40,7 @@ Standing rules (also in `CLAUDE.md`):
 
 ## 4. Current state (versions and what is confirmed)
 
-Both programs are at **version 10**. The newest numbers are published at `https://dmhmca.github.io/get-a-grip/cleanup/version.txt` and `.../dictate/version.txt`.
+Both programs are at **version 12** (6 Nov 2026). Version 12 added spoken "press enter", "carriage return", "CR", "paste that", "colon" and "semicolon", a capital after a full stop or new line, and a spoken "period" at the end of a phrase. Installed copies now check `https://dmhmca.github.io/ChatRite/cleanup/version.txt` and `.../dictate/version.txt` (the new repository). The old `get-a-grip` address still serves version 12 too, for copies that have not yet moved; keep it for a few weeks. Not yet proved: an update that travels only through the new address (needs a version 13). GitHub Actions must stay enabled (GitHub-owned actions only) on the ChatRite repository, or Pages cannot build.
 
 Confirmed working on the 4080 by the owner:
 - Ctrl+Shift+Space word fixing: "Magic!", about 0.7 s on the second request, fixes homophones and capitals.
