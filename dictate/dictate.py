@@ -3,7 +3,7 @@
 Runs on your own PC (Whisper on the graphics card). Nothing is sent anywhere except the one-off model download
 and a check for updates on GitHub Pages. Hotkey (default Ctrl+Alt+M) switches listening on and off.
 """
-VERSION = 10
+VERSION = 11
 
 import os
 import json
@@ -112,6 +112,10 @@ def parse_command(text):
         return ("newline", 2)
     if t in ("stop dictation", "stop listening", "chatrite off", "chat right off"):
         return ("stop", 0)
+    if t in ("press enter", "press return", "hit enter", "carriage return", "cr", "c r", "press cr", "press c r"):
+        return ("enter", 0)
+    if t in ("paste that", "paste it", "paste this", "paste", "press paste", "paste the clipboard"):
+        return ("paste", 0)
     if t in ("polish", "polish that", "polish it", "polish this", "polish the text", "chatrite polish", "chat right polish"):
         return ("polish", 0)
     return None
@@ -413,6 +417,18 @@ def press_shift_enter(times):
         time.sleep(0.02)
 
 
+def press_keys(vks):
+    """Press keys together (for example Ctrl+V) in the focused window, then release them."""
+    ctypes, INPUT, KEYBDINPUT = _win()
+    seq = [(vk, 0) for vk in vks] + [(vk, 0x0002) for vk in reversed(vks)]
+    arr = (INPUT * len(seq))()
+    for i, (vk, fl) in enumerate(seq):
+        arr[i].type = 1
+        arr[i].u.ki = KEYBDINPUT(vk, 0, fl, 0, 0)
+    ctypes.windll.user32.SendInput(len(arr), arr, ctypes.sizeof(INPUT))
+    time.sleep(0.05)
+
+
 def beep(kind, on=True):
     if not on:
         return
@@ -615,6 +631,13 @@ class App:
             if cmd and cmd[0] == "newline":
                 press_shift_enter(cmd[1])
                 self.out.newline(cmd[1])
+            elif cmd and cmd[0] == "enter":
+                # only when asked for by voice: this is the one place a plain Enter is pressed (it sends chat messages)
+                press_keys([0x0D])
+                self.out.newline(1)
+            elif cmd and cmd[0] == "paste":
+                press_keys([0x11, 0x56])
+                self.out.last = "."  # pasted text counts as a finished sentence; the next phrase starts a new one
             elif cmd and cmd[0] == "stop":
                 self.stop("stopped by voice")
                 return
