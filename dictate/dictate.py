@@ -97,6 +97,24 @@ def build_prompt(names, previous):
 
 
 HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "you", "bye", "bye bye", "so", "okay"}
+# Whisper invents these from silence or breathing (they come from the video subtitles it learned from).
+# They are dropped even when said twice in a row, or one after another.
+HALLUCINATED_PHRASES = [
+    "im going to show you how to do this", "in this video im going to show you how to do this",
+    "im going to show you how to do it", "i will show you how to do this", "lets get started",
+    "thank you so much for watching", "thank you for watching", "thanks for watching", "thanks for listening",
+    "please subscribe", "dont forget to subscribe", "subscribe to my channel", "see you in the next video",
+    "see you next time", "bye for now", "thank you very much",
+]
+
+
+def is_hallucination(text):
+    n = " " + normalise(text) + " "
+    for p in sorted(HALLUCINATED_PHRASES, key=len, reverse=True):
+        n = re.sub(r"(?<![a-z])" + p + r"(?![a-z])", " ", n)
+    return not n.split() and bool(normalise(text))
+
+
 STARTERS = set("and but so because which that the a an to of in on for with as if or then than my your our their his her its it this these those we you they he she there when while although though".split())
 
 
@@ -258,7 +276,7 @@ class Output:
         text = text.strip()
         if not text:
             return ""
-        if normalise(text) in HALLUCINATIONS:
+        if normalise(text) in HALLUCINATIONS or is_hallucination(text):
             return ""
         words = normalise(text).split()
         if words and all(w in NOISES for w in words):
@@ -500,6 +518,10 @@ class Engine:
             if sg.no_speech_prob > 0.6 and sg.avg_logprob < -0.8:
                 continue
             if sg.avg_logprob < -1.5:
+                continue
+            if sg.no_speech_prob > 0.85:  # almost certainly silence, however sure the words look
+                continue
+            if getattr(sg, "compression_ratio", 0) > 2.4:  # the same words over and over
                 continue
             parts.append(sg.text.strip())
         return " ".join(p for p in parts if p)
