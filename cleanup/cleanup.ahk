@@ -25,7 +25,12 @@ if (A_ScriptDir != InstallDir) {
 }
 DirCreate(DataDir)
 
-Cfg := {Model: IniRead(IniFile, "Tidy", "Model", "qwen2.5:7b"), Busy: false, LastOriginal: ""}
+Cfg := {Model: IniRead(IniFile, "Tidy", "Model", "qwen2.5:7b"), Busy: false, LastOriginal: "", LastKept: ""
+    , Engine: IniRead(IniFile, "Tidy", "Engine", "local")
+    , CloudModel: IniRead(IniFile, "Tidy", "CloudModel", "anthropic/claude-haiku-5.5")
+    , CloudKey: ""}
+if (Cfg.Engine = "cloud")
+    Cfg.CloudKey := KeyHelper("get")
 
 if !FileExist(VocabFile) {
     FileAppend("; Your words and names, one per line. Lines starting with a semicolon are ignored.`n"
@@ -118,6 +123,12 @@ TidyCore() {
 
 ; ---------------------------------------------------------------- the model
 AskModel(text) {
+    if (Cfg.Engine = "cloud") {
+        try
+            return ParseFixes(CloudChat(BuildPrompt(), text, 400))
+        catch as e
+            Msg("The cloud engine failed (" SubStr(e.Message, 1, 120) "). Using the local model instead.", 3500)
+    }
     body := '{"model":' JStr(Cfg.Model) ',"stream":false,"keep_alive":"24h",'
         . '"options":{"temperature":0,"num_ctx":8192,"num_predict":400},'
         . '"format":{"type":"object","properties":{"fixes":{"type":"array","items":{"type":"object","properties":{"wrong":{"type":"string"},"right":{"type":"string"}},"required":["wrong","right"]}}},"required":["fixes"]},'
@@ -141,7 +152,11 @@ AskModel(text) {
         throw Error(JUnesc(em[1]))
     if !RegExMatch(resp, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
         throw Error("no answer from the model")
-    inner := JUnesc(m[1])
+    return ParseFixes(JUnesc(m[1]))
+}
+
+; Turns the model's {"fixes":[{"wrong":"..","right":".."}]} answer into a list of [wrong, right] pairs.
+ParseFixes(inner) {
     fixes := []
     pos := 1
     while RegExMatch(inner, '"wrong"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"right"\s*:\s*"((?:[^"\\]|\\.)*)"', &m2, pos) {
@@ -149,6 +164,118 @@ AskModel(text) {
         pos := m2.Pos + m2.Len
     }
     return fixes
+}
+
+; ---------------------------------------------------------------- the cloud engine (OpenRouter, optional)
+; Sends the same prompt to a model on OpenRouter. The key lives in the Windows credential store, not in any file.
+CloudChat(sys, user, maxOut) {
+    if (Cfg.CloudKey = "")
+        throw Error("no OpenRouter key is set")
+    body := '{"model":' JStr(Cfg.CloudModel) ',"temperature":0,"max_tokens":' maxOut ',"stream":false,'
+        . '"messages":[{"role":"system","content":' JStr(sys) '},{"role":"user","content":' JStr(user) '}]}'
+    tmpIn := A_Temp "\chatrite-cin.json"
+    tmpOut := A_Temp "\chatrite-cout.json"
+    hdr := A_Temp "\chatrite-chdr.txt"
+    errFile := A_Temp "\chatrite-cerr.txt"
+    try FileDelete(tmpOut)
+    try FileDelete(errFile)
+    f := FileOpen(tmpIn, "w", "UTF-8-RAW")
+    f.Write(body)
+    f.Close()
+    f := FileOpen(hdr, "w", "UTF-8-RAW")
+    f.Write("Authorization: Bearer " Cfg.CloudKey)
+    f.Close()
+    cmd := A_ComSpec ' /c curl.exe -s -S --max-time 30 -H "Content-Type: application/json" -H "@' hdr '" -H "X-Title: ChatRite"'
+        . ' --data-binary "@' tmpIn '" -o "' tmpOut '" https://openrouter.ai/api/v1/chat/completions 2>"' errFile '"'
+    code := RunWait(cmd, , "Hide")
+    try FileDelete(hdr)
+    try FileDelete(tmpIn)
+    if (code != 0 || !FileExist(tmpOut)) {
+        why := FileExist(errFile) ? Trim(FileRead(errFile)) : ""
+        throw Error("could not reach OpenRouter (code " code "). " SubStr(why, 1, 120))
+    }
+    resp := FileRead(tmpOut, "UTF-8")
+    try FileDelete(tmpOut)
+    if RegExMatch(resp, '"error"\s*:\s*\{[^}]*?"message"\s*:\s*"((?:[^"\\]|\\.)*)"', &em)
+        throw Error(JUnesc(em[1]))
+    if !RegExMatch(resp, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
+        throw Error("no answer from the model")
+    return JUnesc(m[1])
+}
+
+; mode "get" returns the saved OpenRouter key, mode "set" saves the one in the CHATRITE_NEWKEY variable.
+KeyHelper(mode) {
+    ps := A_Temp "\chatrite-key.ps1"
+    out := A_Temp "\chatrite-key.txt"
+    try FileDelete(ps)
+    try FileDelete(out)
+    FileAppend(KeyScriptText(), ps, "UTF-8")
+    RunWait(A_ComSpec ' /c powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' ps '" ' mode ' > "' out '" 2>&1', , "Hide")
+    r := FileExist(out) ? Trim(FileRead(out), " `t`r`n") : ""
+    try FileDelete(ps)
+    try FileDelete(out)
+    return r
+}
+
+KeyScriptText() {
+    s := "
+    (LTrim
+    param($mode)
+    [void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime]
+    $v = New-Object Windows.Security.Credentials.PasswordVault
+    if ($mode -eq 'set') {
+    try { $old = $v.Retrieve('ChatRite OpenRouter','key'); $v.Remove($old) } catch {}
+    $k = $env:CHATRITE_NEWKEY
+    if ($k) { $v.Add((New-Object Windows.Security.Credentials.PasswordCredential('ChatRite OpenRouter','key',$k))) }
+    } elseif ($mode -eq 'get') {
+    try { $c = $v.Retrieve('ChatRite OpenRouter','key'); $c.RetrievePassword(); [Console]::Out.Write($c.Password) } catch {}
+    }
+    )"
+    return s
+}
+
+CloudSetup() {
+    r := InputBox("Paste your OpenRouter key (it starts with sk-or-). You can make one at openrouter.ai/keys.`n`nIt is kept in Windows' own protected storage on this PC. It is not shown again and not saved in any file.`n`nWhile this is on, the text you fix or polish is sent to OpenRouter.", "ChatRite: cloud engine", "w520 h270 Password")
+    if (r.Result != "OK" || Trim(r.Value) = "")
+        return
+    key := Trim(r.Value)
+    EnvSet("CHATRITE_NEWKEY", key)
+    KeyHelper("set")
+    EnvSet("CHATRITE_NEWKEY", "")
+    old := Cfg.CloudKey
+    Cfg.CloudKey := key
+    Msg("Testing the key...", 15000)
+    try {
+        CloudChat("Reply with the single word OK.", "ping", 8)
+    } catch as e {
+        Cfg.CloudKey := old
+        MsgBox("The key did not work: " SubStr(e.Message, 1, 200) "`n`nNothing was switched on.", "ChatRite: cloud engine", 48)
+        return
+    }
+    Cfg.Engine := "cloud"
+    IniWrite("cloud", IniFile, "Tidy", "Engine")
+    try A_TrayMenu.Check("Use the cloud engine (OpenRouter)")
+    Msg("The cloud engine is on (" Cfg.CloudModel ").", 4000)
+}
+
+ToggleCloud(name, *) {
+    if (Cfg.Engine = "cloud") {
+        Cfg.Engine := "local"
+        IniWrite("local", IniFile, "Tidy", "Engine")
+        A_TrayMenu.Uncheck(name)
+        Msg("Back to the local model. Nothing leaves this PC.", 3500)
+        return
+    }
+    if (Cfg.CloudKey = "")
+        Cfg.CloudKey := KeyHelper("get")
+    if (Cfg.CloudKey = "") {
+        CloudSetup()
+        return
+    }
+    Cfg.Engine := "cloud"
+    IniWrite("cloud", IniFile, "Tidy", "Engine")
+    A_TrayMenu.Check(name)
+    Msg("The cloud engine is on (" Cfg.CloudModel ").", 3500)
 }
 
 BuildPrompt() {
@@ -270,6 +397,7 @@ PolishCore() {
             Send("{Right}")
         Msg("The model changed the words too much, so nothing was replaced. Try again, or select less text.", 5000)
         WriteLog(secs, 0, 0, text)
+        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " | polish refused: " Cfg.LastKept "`n", LogFile, "UTF-8")
         return
     }
     out := hadCRLF ? StrReplace(result, "`n", "`r`n") : result
@@ -299,6 +427,12 @@ AskPolish(text) {
     for l in VocabNotes()
         sys .= "`n" l
     maxOut := Min(4096, StrLen(text) // 2 + 256)
+    if (Cfg.Engine = "cloud") {
+        try
+            return CloudChat(sys, text, maxOut)
+        catch as e
+            Msg("The cloud engine failed (" SubStr(e.Message, 1, 120) "). Using the local model instead.", 3500)
+    }
     body := '{"model":' JStr(Cfg.Model) ',"stream":false,"keep_alive":"24h",'
         . '"options":{"temperature":0,"num_ctx":8192,"num_predict":' maxOut '},'
         . '"messages":[{"role":"system","content":' JStr(sys) '},{"role":"user","content":' JStr(text) '}]}'
@@ -349,6 +483,7 @@ WordsKept(orig, out) {
         }
         pos := m.Pos + m.Len
     }
+    Cfg.LastKept := "kept " kept " of " total " words, " outTotal " in the answer"
     return (kept >= total * 0.9 - 1) && (outTotal <= total * 1.1 + 3)
 }
 
@@ -435,7 +570,10 @@ ClearTip() {
 
 WriteLog(secs, applied, skipped, text) {
     words := StrSplit(Trim(text), " ").Length
-    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " | " secs " s | " applied " fixes | " skipped " skipped | " words " words | " Cfg.Model "`n", LogFile, "UTF-8")
+    who := Cfg.Model
+    if (Cfg.Engine = "cloud")
+        who := Cfg.CloudModel
+    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " | " secs " s | " applied " fixes | " skipped " skipped | " words " words | " who "`n", LogFile, "UTF-8")
 }
 
 Fetch(url) {
@@ -461,6 +599,10 @@ SetupTray() {
     A_TrayMenu.Add("Edit my words and names", (*) => Run('notepad.exe "' VocabFile '"'))
     A_TrayMenu.Add("Copy the last original text back", (*) => CopyOriginal())
     A_TrayMenu.Add("Change the model...", (*) => ChangeModel())
+    A_TrayMenu.Add("Use the cloud engine (OpenRouter)", ToggleCloud)
+    if (Cfg.Engine = "cloud")
+        A_TrayMenu.Check("Use the cloud engine (OpenRouter)")
+    A_TrayMenu.Add("Cloud engine: enter or change my OpenRouter key...", (*) => CloudSetup())
     A_TrayMenu.Add("Voice typing: set up ChatRite Dictate...", (*) => InstallDictate())
     A_TrayMenu.Add("Voice typing: start it now", (*) => StartDictate())
     A_TrayMenu.Add("Check for updates now", (*) => CheckUpdate(true))
@@ -689,7 +831,7 @@ InstallDictate() {
 
 ; ---------------------------------------------------------------- Ollama and model checks
 StartUp() {
-    if EnsureModel()
+    if (Cfg.Engine != "cloud" && EnsureModel())
         Warm()
     SetTimer(() => AutoUpdate(), -4000)
 }

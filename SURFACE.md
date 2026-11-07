@@ -28,6 +28,12 @@ Work on the `surface` branch of the repository, never on `main` (the 4080 versio
 4. Clean-up model: Ollama has a Windows ARM build; try a small model (for example `qwen2.5:3b` or `7b`) and time fix and polish. Otherwise decide with the owner about a cloud model.
 5. Fallback if local is too slow or too inaccurate: Soniox cloud engine (see `HANDOVER.md` section 11, step 5). It sends audio off the PC, so ask the owner first.
 
+## Cloud engine for fix and polish (7 Nov 2026, built on the `surface` branch)
+The local 3b model on the Surface CPU is slow and weak at homophones, and the NPU route failed (Foundry Local: the 1.5b NPU model was too weak, the 7b one crashed the NPU on a 16 GB machine). The owner accepts text leaving this one machine for a pay-per-use cloud model. Agreed exception to "nothing leaves the PC": the Surface only, only while `Engine=cloud` is set in `settings.ini` (tray: "Use the cloud engine (OpenRouter)"). Default stays `local`, so the 4080 is unchanged.
+- ChatRite sends the same prompts to OpenRouter (`anthropic/claude-haiku-5.5`, about $0.10 in and $0.50 out per million tokens, so a polish costs a hundredth of a cent). If the call fails it falls back to the local model. The model can be changed with `CloudModel` in `settings.ini`.
+- The key is typed once into a masked box (tray: "Cloud engine: enter or change my OpenRouter key...") and kept in the Windows credential store (target name `ChatRite OpenRouter`). Never in a file, the repository or chat.
+- A published ChatRite update with a higher version number would replace the Surface's installed copy and drop this code until it is merged to `main`.
+
 ## Rules specific to this work
 - Work in a copy of the project on the Surface. Do not publish or bump versions without the owner's yes.
 - Report honestly what was and was not tested, with timings.

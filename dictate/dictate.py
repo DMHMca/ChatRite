@@ -39,6 +39,12 @@ DEFAULTS = {
     "polish_wait_s": "5",      # after you say "polish", wait this long before typing again
     "smart_stops": "no",      # yes =the local model decides, from the grammar, where a sentence ends
     "stops_model": "",         # empty = the model ChatRite uses (settings.ini), else qwen2.5:7b
+    "device": "auto",          # auto = graphics card if it works, else processor; cpu = processor only
+    "cpu_model": "base.en",    # the model used on the processor (small.en is more accurate but about 5x slower)
+    "model_folder": "",        # where speech models are stored; empty = the Windows default (on C)
+    "boost_quiet": "no",       # yes = raise quiet speech to a good level before recognising it
+    "floating_button": "no",   # yes = a round on-screen button that starts and stops listening (for tablet mode)
+    "button_size": "96",       # size of that button in pixels
 }
 
 
@@ -496,19 +502,33 @@ class Engine:
         from faster_whisper import WhisperModel
         import numpy as np
         name = self.s.get("model")
-        try:
-            say("Loading the speech model (only the very first start downloads it, about 1.6 GB)...")
-            self.model = WhisperModel(name, device="cuda", compute_type="float16")
+        folder = self.s.get("model_folder", "").strip() or None
+        want_cpu = self.s.get("device", "auto").strip().lower() == "cpu"
+        if not want_cpu:
+            try:
+                say("Loading the speech model (the very first start downloads it, about 1.6 GB)...")
+                self.model = WhisperModel(name, device="cuda", compute_type="float16", download_root=folder)
+                list(self.model.transcribe(np.zeros(RATE, dtype="float32"), language="en")[0])
+                self.device = "graphics card"
+            except Exception as e:
+                log("GPU failed: %r" % (e,))
+                say("The graphics card could not be used, so using the processor instead (slower).")
+                self.model = None
+        if self.model is None:
+            cpu_name = self.s.get("cpu_model", "base.en").strip() or "base.en"
+            say("Loading the speech model for the processor (%s)..." % cpu_name)
+            self.model = WhisperModel(cpu_name, device="cpu", compute_type="int8",
+                                      cpu_threads=min(8, os.cpu_count() or 4), download_root=folder)
             list(self.model.transcribe(np.zeros(RATE, dtype="float32"), language="en")[0])
-            self.device = "graphics card"
-        except Exception as e:
-            log("GPU failed: %r" % (e,))
-            say("The graphics card could not be used, so using the processor instead (slower).")
-            self.model = WhisperModel("small.en", device="cpu", compute_type="int8")
             self.device = "processor"
         log("model ready on %s" % self.device)
 
     def transcribe(self, audio, previous):
+        if self.s.get("boost_quiet", "no") == "yes":
+            # quiet microphone (some tablets): bring the loudest part of the phrase up to a good level
+            peak = float(abs(audio).max()) if len(audio) else 0.0
+            if 0.0 < peak < 0.3:
+                audio = (audio * (0.3 / peak)).astype("float32")
         segs, info = self.model.transcribe(
             audio, language="en", beam_size=5, temperature=0.0,
             condition_on_previous_text=False, without_timestamps=True,
@@ -516,8 +536,10 @@ class Engine:
         parts = []
         for sg in segs:
             if sg.no_speech_prob > 0.6 and sg.avg_logprob < -0.8:
+                log("dropped a segment: no_speech %.2f, logprob %.2f" % (sg.no_speech_prob, sg.avg_logprob))
                 continue
             if sg.avg_logprob < -1.5:
+                log("dropped a segment: logprob %.2f" % sg.avg_logprob)
                 continue
             if sg.no_speech_prob > 0.85:  # almost certainly silence, however sure the words look
                 continue
@@ -527,9 +549,149 @@ class Engine:
         return " ".join(p for p in parts if p)
 
 
+class FloatButton:
+    """A round button that stays on top of every window; a tap starts or stops listening.
+    It never takes the focus, so the text box you are typing in keeps it. Drag it to move it."""
+
+    def __init__(self, app):
+        self.app = app
+        self.size = max(48, int(app.s.get("button_size", "96") or 96))
+        self.shown = True
+        self.reset = False
+        self.drawn = None
+
+    def run(self):
+        try:
+            self._run()
+        except Exception as e:
+            log("floating button failed: %r" % (e,))
+
+    def _run(self):
+        # inside a virtual environment Tk may not find its support files, so point it at the base install
+        for var, sub, probe in (("TCL_LIBRARY", "tcl8.6", "init.tcl"), ("TK_LIBRARY", "tk8.6", "tk.tcl")):
+            p = os.path.join(sys.base_prefix, "tcl", sub)
+            if not os.environ.get(var) and os.path.exists(os.path.join(p, probe)):
+                os.environ[var] = p
+        import tkinter as tk
+        import ctypes
+        app = self.app
+        s = self.size
+        pos_file = os.path.join(DATA, "button-position.txt")
+        root = tk.Tk()
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        key = "#010203"
+        root.configure(bg=key)
+        root.attributes("-transparentcolor", key)
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        x, y = sw - s - 40, sh - s - 140
+        try:
+            a, b = open(pos_file).read().split(",")
+            x, y = int(a), int(b)
+        except Exception:
+            pass
+        x = min(max(0, x), sw - s)
+        y = min(max(0, y), sh - s)
+        root.geometry("%dx%d+%d+%d" % (s, s, x, y))
+        cv = tk.Canvas(root, width=s, height=s, bg=key, highlightthickness=0, bd=0)
+        cv.pack()
+        root.update_idletasks()
+        root.update()
+        # never take the focus away from the window being typed into
+        user32 = ctypes.windll.user32
+        user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+        user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+        hwnd = user32.GetParent(root.winfo_id()) or root.winfo_id()
+        ex = user32.GetWindowLongPtrW(hwnd, -20)
+        user32.SetWindowLongPtrW(hwnd, -20, ex | 0x08000000 | 0x00000080)  # no-activate, tool window
+        from ctypes import wintypes
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+
+        def on_screen():
+            return bool(user32.MonitorFromWindow(hwnd, 0))   # 0 = none if it is on no display
+
+        def back_to_corner():
+            # a display was unplugged or the layout changed: bring the button home to the bottom right
+            r = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            w, h = r.right - r.left, r.bottom - r.top
+            sw2, sh2 = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+            user32.SetWindowPos(hwnd, -1, max(0, sw2 - w - 40), max(0, sh2 - h - 140), 0, 0, 0x0001 | 0x0010)
+            log("floating button moved back to the corner")
+
+        def draw(state):
+            cv.delete("all")
+            m = max(4, s // 12)
+            if state == "listening":      # blue disc, white centre (same as the tray icon)
+                cv.create_oval(m, m, s - m, s - m, fill="#1E64C8", outline="#FFFFFF", width=3)
+                c, r = s // 2, s // 8
+                cv.create_oval(c - r, c - r, c + r, c + r, fill="#FFFFFF", outline="")
+            elif state == "working":      # amber square
+                cv.create_rectangle(m, m, s - m, s - m, fill="#E6A000", outline="#FFFFFF", width=3)
+            else:                         # grey ring
+                cv.create_oval(m, m, s - m, s - m, fill="#F2F2F2", outline="#787878", width=max(6, s // 12))
+
+        st = {"x": 0, "y": 0, "wx": 0, "wy": 0, "moved": False}
+
+        def press(e):
+            st.update(x=e.x_root, y=e.y_root, wx=root.winfo_x(), wy=root.winfo_y(), moved=False)
+
+        def move(e):
+            dx, dy = e.x_root - st["x"], e.y_root - st["y"]
+            if abs(dx) + abs(dy) > 12:
+                st["moved"] = True
+            if st["moved"]:
+                root.geometry("+%d+%d" % (st["wx"] + dx, st["wy"] + dy))
+
+        def release(e):
+            if st["moved"]:
+                try:
+                    with open(pos_file, "w") as f:
+                        f.write("%d,%d" % (root.winfo_x(), root.winfo_y()))
+                except Exception:
+                    pass
+            elif app.engine.model is not None:      # a tap, once the speech model is loaded
+                threading.Thread(target=app.toggle, daemon=True).start()
+
+        cv.bind("<ButtonPress-1>", press)
+        cv.bind("<B1-Motion>", move)
+        cv.bind("<ButtonRelease-1>", release)
+
+        def tick():
+            try:
+                if app.state != self.drawn:
+                    draw(app.state)
+                    self.drawn = app.state
+                hidden = root.state() == "withdrawn"
+                if self.shown and hidden:
+                    root.deiconify()
+                elif not self.shown and not hidden:
+                    root.withdraw()
+                if self.shown:
+                    root.attributes("-topmost", True)
+                    if self.reset or not on_screen():
+                        self.reset = False
+                        back_to_corner()
+            except Exception:
+                pass
+            root.after(300, tick)
+
+        draw("off")
+        tick()
+        log("floating button shown")
+        root.mainloop()
+
+
 class App:
     def __init__(self):
         self.s = load_settings()
+        self.state = "off"
+        self.button = None
         self.engine = Engine(self.s)
         self.out = Output(load_vocab(), self.s.get("auto_stops", "no") == "yes", make_boundary(self.s))
         self.q = queue.Queue()
@@ -563,6 +725,7 @@ class App:
             pass
 
     def set_state(self, state):
+        self.state = state
         try:
             self.icon.icon = self.img(state)
             self.icon.title = {"listening": "ChatRite Dictate: listening", "working": "ChatRite Dictate: working",
@@ -749,12 +912,26 @@ class App:
             log("hotkey failed: %r" % (e,))
             self.say("Could not set the hotkey: %s" % e)
         threading.Thread(target=self.update_loop, daemon=True).start()
+        if self.s.get("floating_button", "no") == "yes":
+            self.button = FloatButton(self)
+            threading.Thread(target=self.button.run, daemon=True).start()
+
+    def toggle_button(self):
+        if self.button is not None:
+            self.button.shown = not self.button.shown
+
+    def home_button(self):
+        if self.button is not None:
+            self.button.shown = True
+            self.button.reset = True
 
     def run(self):
         import pystray
         menu = pystray.Menu(
             pystray.MenuItem("Start or stop listening (%s)" % self.s.get("hotkey"), lambda i, it: self.toggle(), default=True),
-            pystray.MenuItem("Edit my words and names", lambda i, it: os.startfile(VOCAB) if os.path.exists(VOCAB) else None),
+            pystray.MenuItem("Show or hide the floating button", lambda i, it: self.toggle_button()),
+            pystray.MenuItem("Bring the floating button back to the corner", lambda i, it: self.home_button()),
+            pystray.MenuItem("Edit my words and names",lambda i, it: os.startfile(VOCAB) if os.path.exists(VOCAB) else None),
             pystray.MenuItem("Settings file", lambda i, it: os.startfile(INI)),
             pystray.MenuItem("Open the log folder", lambda i, it: os.startfile(DATA)),
             pystray.MenuItem("Check for updates now", lambda i, it: threading.Thread(target=self.check_update, args=(True,), daemon=True).start()),
@@ -767,6 +944,21 @@ class App:
 
 def main():
     os.makedirs(DATA, exist_ok=True)
+    try:  # if the program ever dies hard, leave a note of where (no text of yours is in it)
+        import faulthandler
+        global _crash_file
+        _crash_file = open(os.path.join(DATA, "dictate-crash.txt"), "a")
+        faulthandler.enable(file=_crash_file, all_threads=True)
+    except Exception:
+        pass
+    try:  # sharp, correctly sized floating button on high-resolution screens
+        import ctypes
+        try:  # per-monitor aware, so the button keeps its size when displays come and go
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
     try:  # pythonw has no console; keep any library messages in the log
         sys.stdout = sys.stderr = open(os.path.join(DATA, "dictate-console.txt"), "a", buffering=1, encoding="utf-8")
     except Exception:
