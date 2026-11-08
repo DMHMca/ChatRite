@@ -533,8 +533,8 @@ def press_backspace(n):
     """Press Backspace n times in the focused window."""
     ctypes, INPUT, KEYBDINPUT = _win()
     n = max(0, min(int(n), 4000))
-    for i in range(0, n, 40):
-        k = min(40, n - i)
+    for i in range(0, n, 10):                 # small paced batches, so the program keeps up with every one
+        k = min(10, n - i)
         arr = (INPUT * (k * 2))()
         for j in range(k):
             for q, fl in ((0, 0), (1, 0x0002)):
@@ -542,7 +542,8 @@ def press_backspace(n):
                 x.type = 1
                 x.u.ki = KEYBDINPUT(0x08, 0, fl, 0, 0)
         ctypes.windll.user32.SendInput(len(arr), arr, ctypes.sizeof(INPUT))
-        time.sleep(0.003)
+        time.sleep(0.01)
+    time.sleep(0.1)                           # let the last deletions land before anything else is typed
 
 
 def press_keys(vks):
@@ -836,8 +837,14 @@ class FloatButton:
                 except Exception:
                     pass
             else:
-                pst["until"] = time.time() + float(app.s.get("polish_wait_s", "5")) + 1
-                threading.Thread(target=app.polish_now, daemon=True).start()
+                # a double tap: one stray touch (a finger scrolling past, a palm) must not start a polish
+                now = time.time()
+                if now - pst.get("tap", 0.0) <= 0.8:
+                    pst["tap"] = 0.0
+                    pst["until"] = now + float(app.s.get("polish_wait_s", "5")) + 1
+                    threading.Thread(target=app.polish_now, daemon=True).start()
+                else:
+                    pst["tap"] = now
 
         pcv.bind("<ButtonPress-1>", ppress)
         pcv.bind("<B1-Motion>", pmove)
@@ -892,6 +899,7 @@ class App:
         self.worker = None
         self.icon = None
         self.selected = False   # true just after the spoken "select all"
+        self.hold_until = 0.0   # nothing is typed or deleted before this time (a polish is pasting)
         self.beeps = self.s.get("beeps", "yes") == "yes"
         self.stop_flag = threading.Event()
 
@@ -933,6 +941,8 @@ class App:
             log("polish asked for (button)")
             self.out.last = "."  # the polished text ends a sentence, and the next phrase follows a space
             self.out.clear_tail()  # the text was replaced
+            # speech heard meanwhile waits in the queue until the paste has finished, as with the spoken "polish"
+            self.hold_until = time.time() + float(self.s.get("polish_wait_s", "5"))
         except Exception as e:
             log("polish button failed: %r" % (e,))
 
@@ -1020,6 +1030,7 @@ class App:
         """Spoken deleting, counted from the text Dictate typed itself (see Output.pop_phrase and pop_words)."""
         kind, n = cmd
         o = self.out
+        time.sleep(0.15)                      # let the text typed just before land in the box first
         selected = self.selected              # "select all" came just before
         self.selected = False
         if kind == "select_all":
@@ -1069,6 +1080,9 @@ class App:
         try:
             text = self.engine.transcribe(audio, self.out.last)
             secs = time.time() - t0
+            wait = self.hold_until - time.time()
+            if wait > 0:
+                time.sleep(wait)   # a polish is still pasting: do not type or delete on top of it
             cmd = parse_command(text) if text else None
             if self.selected and not (cmd and cmd[0] in ("delete_that", "select_all")):
                 # typing or another command replaces the selection, so what was typed before is gone

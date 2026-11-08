@@ -75,7 +75,10 @@ TidyCore() {
     Send("^c")
     if !ClipWait(0.5) {
         usedAll := true
-        Send("^a")
+        ; the whole text box only: Ctrl+A would select the whole page when the box does not have the focus
+        Send("^{Home}")
+        Sleep(40)
+        Send("^+{End}")
         Sleep(80)
         A_Clipboard := ""
         Send("^c")
@@ -369,7 +372,10 @@ PolishCore() {
     Send("^c")
     if !ClipWait(0.5) {
         usedAll := true
-        Send("^a")
+        ; the whole text box only: Ctrl+A would select the whole page when the box does not have the focus
+        Send("^{Home}")
+        Sleep(40)
+        Send("^+{End}")
         Sleep(80)
         A_Clipboard := ""
         Send("^c")
