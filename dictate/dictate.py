@@ -129,7 +129,39 @@ def normalise(text):
     return re.sub(r"[^a-z ]", "", text.lower()).strip()
 
 
+NUMBER_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split())}
+NUMBER_WORDS["a"] = 1
+
+
+def parse_delete(text):
+    """Spoken editing, worded like the Voice In extension so there is one set of commands to remember:
+    'delete word', 'delete last word', 'delete last 3 words', 'delete that' (the last phrase, or the selection),
+    'select all', 'undo', and 'delete everything'. Returns None for anything else."""
+    t = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", text.lower())).strip()
+    if t in ("delete that", "erase that", "scratch that", "ignore that"):
+        return ("delete_that", 0)
+    if t in ("select all", "select everything"):
+        return ("select_all", 0)
+    if t in ("undo", "undo that"):
+        return ("undo", 0)
+    if re.fullmatch(r"(?:delete|erase|remove|clear) (?:everything|all|all text|all of it)", t):
+        return ("delete_all", 0)
+    m = re.fullmatch(r"(?:delete|erase|remove) (?:the )?(?:(?:last|previous|final) )?(?:(\w+) )?words?", t)
+    if m:
+        w = m.group(1)
+        if w is None:
+            return ("delete_words", 1)
+        n = int(w) if w.isdigit() else NUMBER_WORDS.get(w)
+        if n and 1 <= n <= 50:
+            return ("delete_words", n)
+    return None
+
+
 def parse_command(text):
+    dl = parse_delete(text)
+    if dl:
+        return dl
     t = normalise(text)
     if t in ("new line", "newline"):
         return ("newline", 1)
@@ -258,12 +290,47 @@ class Output:
         self.last = ""
         self.names = set(n.lower() for n in (names or []))
         self.auto_stops = auto_stops
+        self.typed = []   # what was typed, phrase by phrase, so a spoken "delete" knows how many characters to remove
+        self.tail = ""    # the same text joined up (recent part only)
 
     def reset(self):
         self.last = ""
+        self.clear_tail()
 
     def newline(self, n):
         self.last = "\n"
+        self.remember("\n" * n)
+
+    # --- spoken deleting: counted from what Dictate itself typed, never from the editor's idea of a word
+    def remember(self, s):
+        if s:
+            self.typed = (self.typed + [s])[-200:]
+            self.tail = (self.tail + s)[-4000:]
+
+    def clear_tail(self):
+        self.typed = []
+        self.tail = ""
+
+    def pop_phrase(self):
+        """Forget the last typed phrase; returns how many characters it was."""
+        if not self.typed:
+            return 0
+        s = self.typed.pop()
+        self.tail = self.tail[:len(self.tail) - len(s)] if len(s) <= len(self.tail) else ""
+        return len(s)
+
+    def pop_words(self, n):
+        """Forget the last n words (and the space before each); returns how many characters that was."""
+        s = self.tail
+        for _ in range(n):
+            m = re.search(r"[ \t]*\S+\s*$", s)
+            if not m:
+                break
+            s = s[:m.start()]
+        count = len(self.tail) - len(s)
+        self.tail = s
+        self.typed = []   # phrase boundaries no longer match, so "delete that" must not remove the rest
+        return count
 
     def prepare(self, text):
         text = " ".join(text.split())
@@ -451,6 +518,31 @@ def press_shift_enter(times):
             arr[i].u.ki = KEYBDINPUT(vk, 0, fl, 0, 0)
         ctypes.windll.user32.SendInput(len(arr), arr, ctypes.sizeof(INPUT))
         time.sleep(0.02)
+
+
+def select_field():
+    """Select all the text in the text box being typed in: Ctrl+Home, then Ctrl+Shift+End.
+    Unlike Ctrl+A this stays inside the edit field; with no edit field focused it selects nothing, not the whole page."""
+    press_keys([0x11, 0x24])
+    time.sleep(0.05)
+    press_keys([0x11, 0x10, 0x23])
+    time.sleep(0.05)
+
+
+def press_backspace(n):
+    """Press Backspace n times in the focused window."""
+    ctypes, INPUT, KEYBDINPUT = _win()
+    n = max(0, min(int(n), 4000))
+    for i in range(0, n, 40):
+        k = min(40, n - i)
+        arr = (INPUT * (k * 2))()
+        for j in range(k):
+            for q, fl in ((0, 0), (1, 0x0002)):
+                x = arr[j * 2 + q]
+                x.type = 1
+                x.u.ki = KEYBDINPUT(0x08, 0, fl, 0, 0)
+        ctypes.windll.user32.SendInput(len(arr), arr, ctypes.sizeof(INPUT))
+        time.sleep(0.003)
 
 
 def press_keys(vks):
@@ -799,6 +891,7 @@ class App:
         self.stream = None
         self.worker = None
         self.icon = None
+        self.selected = False   # true just after the spoken "select all"
         self.beeps = self.s.get("beeps", "yes") == "yes"
         self.stop_flag = threading.Event()
 
@@ -839,6 +932,7 @@ class App:
                 f.write("now")
             log("polish asked for (button)")
             self.out.last = "."  # the polished text ends a sentence, and the next phrase follows a space
+            self.out.clear_tail()  # the text was replaced
         except Exception as e:
             log("polish button failed: %r" % (e,))
 
@@ -922,6 +1016,53 @@ class App:
                 self.stop("timed out")
                 return
 
+    def do_delete(self, cmd):
+        """Spoken deleting, counted from the text Dictate typed itself (see Output.pop_phrase and pop_words)."""
+        kind, n = cmd
+        o = self.out
+        selected = self.selected              # "select all" came just before
+        self.selected = False
+        if kind == "select_all":
+            select_field()
+            self.selected = True
+            log("selected all")
+            return
+        if kind == "undo":
+            press_keys([0x11, 0x5A])
+            o.clear_tail()                    # what the editor undid is unknown
+            o.last = ""
+            log("undo")
+            return
+        if kind == "delete_that" and selected:
+            press_backspace(1)                # removes the selection
+            o.clear_tail()
+            o.last = "\n"
+            log("deleted the selection")
+            return
+        if kind == "delete_all":
+            # select the whole text box, then Backspace (not Delete: in a file list Backspace only goes up a folder,
+            # Delete would bin the files)
+            select_field()
+            press_backspace(1)
+            o.clear_tail()
+            o.last = "\n"  # an empty box: the next phrase starts with a capital letter
+            log("deleted everything")
+            return
+        count = o.pop_phrase() if kind == "delete_that" else o.pop_words(n)
+        if count:
+            press_backspace(count)
+            rest = o.tail[-200:].strip()
+            o.last = rest
+            log("deleted %d characters (%s)" % (count, "last phrase" if kind == "delete_that" else "%d word(s)" % n))
+        elif kind == "delete_words":
+            # nothing typed by Dictate is on record (typed by hand, pasted or polished): let the editor count the words
+            for _ in range(n):
+                press_keys([0x11, 0x08])
+            o.last = ""
+            log("deleted %d word(s) with Ctrl+Backspace" % n)
+        else:
+            log("nothing to delete: Dictate has typed nothing since it started listening")
+
     def handle(self, audio):
         t0 = time.time()
         self.set_state("working")
@@ -929,6 +1070,10 @@ class App:
             text = self.engine.transcribe(audio, self.out.last)
             secs = time.time() - t0
             cmd = parse_command(text) if text else None
+            if self.selected and not (cmd and cmd[0] in ("delete_that", "select_all")):
+                # typing or another command replaces the selection, so what was typed before is gone
+                self.selected = False
+                self.out.clear_tail()
             if cmd and cmd[0] == "newline":
                 press_shift_enter(cmd[1])
                 self.out.newline(cmd[1])
@@ -939,6 +1084,9 @@ class App:
             elif cmd and cmd[0] == "paste":
                 press_keys([0x11, 0x56])
                 self.out.last = "."  # pasted text counts as a finished sentence; the next phrase starts a new one
+                self.out.clear_tail()  # the pasted length is unknown
+            elif cmd and cmd[0] in ("delete_that", "delete_words", "delete_all", "select_all", "undo"):
+                self.do_delete(cmd)
             elif cmd and cmd[0] == "stop":
                 self.stop("stopped by voice")
                 return
@@ -951,10 +1099,12 @@ class App:
                 # speech heard meanwhile waits in the queue, so nothing is lost; give the paste time to finish
                 time.sleep(float(self.s.get("polish_wait_s", "5")))
                 self.out.last = "."  # the polished text ends a sentence, and the next phrase follows a space
+                self.out.clear_tail()  # the text was replaced
             else:
                 typed = self.out.prepare(text)
                 if typed:
                     type_text(typed)
+                    self.out.remember(typed)
             log("phrase %.1fs of speech, %.2fs to recognise, %d characters" % (len(audio) / RATE, secs, len(text)))
         except Exception as e:
             log("phrase failed: %r" % (e,))

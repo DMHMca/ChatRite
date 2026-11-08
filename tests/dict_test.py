@@ -46,6 +46,25 @@ check('polish command', d.parse_command('Polish that.') == ('polish', 0) and d.p
 check('stop', d.parse_command('Stop dictation.') == ('stop', 0))
 check('ordinary text is not a command', d.parse_command('I need a new paragraph in the post.') is None)
 
+
+# --- spoken deleting (worded like the Voice In extension)
+check('delete that', d.parse_command('Delete that.') == ('delete_that', 0) and d.parse_command('Scratch that') == ('delete_that', 0))
+check('delete everything', d.parse_command('Delete everything.') == ('delete_all', 0) and d.parse_command('clear all') == ('delete_all', 0))
+check('delete word and delete last word', d.parse_command('Delete word.') == ('delete_words', 1) and d.parse_command('delete last word') == ('delete_words', 1))
+check('delete last N words', d.parse_command('Delete the last three words.') == ('delete_words', 3) and d.parse_command('delete last 12 words') == ('delete_words', 12))
+check('select all and undo', d.parse_command('Select all.') == ('select_all', 0) and d.parse_command('Undo.') == ('undo', 0))
+check('deleting inside a sentence is not a command',
+      d.parse_command('please delete the last word of the report') is None and d.parse_command('I will delete that file') is None)
+o = d.Output()
+for s in ("The meeting went well", " and we agreed", " to start in March."):
+    o.remember(s)
+check('delete that removes the last phrase', o.pop_phrase() == 19 and o.tail == "The meeting went well and we agreed", o.tail)
+check('delete two words counts the space before each', o.pop_words(2) == 10 and o.tail == "The meeting went well and", o.tail)
+check('delete one word counts the space before it', o.pop_words(1) == 4 and o.tail == "The meeting went well", o.tail)
+check('after deleting words, delete that has nothing to remove', o.pop_phrase() == 0)
+o2 = d.Output(); o2.remember("one two")
+check('more words than there are removes only what exists', o2.pop_words(5) == 7 and o2.tail == "", o2.tail)
+
 # --- output spacing and capitals
 o = d.Output(["Samarkand"])          # no sentence check (boundary=None): nothing is added at a pause
 check('first phrase: no leading space, no stop added', o.prepare('Hello there.') == 'Hello there')
