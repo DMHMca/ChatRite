@@ -31,6 +31,7 @@ DEFAULTS = {
     "hotkey": "ctrl+alt+m",
     "model": "large-v3-turbo",
     "silence_ms": "600",       # a pause this long ends a phrase
+    "min_speech_ms": "300",    # a sound with less speech than this is ignored (lower it if short words go missing)
     "idle_timeout_s": "90",    # switch off after this long without speech (0 = never)
     "threshold": "0",          # 0 = work it out from the room noise
     "microphone": "",          # part of a device name; empty = Windows default
@@ -102,7 +103,7 @@ def build_prompt(names, previous):
     return " ".join(parts)
 
 
-HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "you", "bye", "bye bye", "so", "okay"}
+HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "you", "bye", "bye bye"}  # "so" and "okay" are real words you may dictate alone, so they are kept
 # Whisper invents these from silence or breathing (they come from the video subtitles it learned from).
 # They are dropped even when said twice in a row, or one after another.
 HALLUCINATED_PHRASES = [
@@ -140,7 +141,8 @@ def parse_command(text):
         return ("enter", 0)
     if t in ("paste that", "paste it", "paste this", "paste", "press paste", "paste the clipboard"):
         return ("paste", 0)
-    if t in ("polish", "polish that", "polish it", "polish this", "polish the text", "chatrite polish", "chat right polish"):
+    if t in ("polish", "polish that", "polish it", "polish this", "polish the text", "chatrite polish", "chat right polish",
+             "polished", "polish up", "polish it up", "i turn"):  # "i turn" is how the small model often hears "polish"
         return ("polish", 0)
     return None
 
@@ -368,6 +370,10 @@ class Endpointer:
                 blocks = self.buf[:len(self.buf) - extra] if extra else self.buf
                 if self.speech >= self.min_speech_n:
                     out.append(np.concatenate(blocks))
+                else:
+                    # a short, quiet word can fall under the minimum; say so (numbers only) so it is not lost silently
+                    log("ignored a very short sound: %d ms of speech, the minimum is %d ms" % (
+                        self.speech * BLOCK * 1000 // RATE, self.min_speech_n * BLOCK * 1000 // RATE))
                 self.in_speech = False
                 self.buf = []
                 self.run = 0
@@ -647,6 +653,7 @@ class FloatButton:
                 st["moved"] = True
             if st["moved"]:
                 root.geometry("+%d+%d" % (st["wx"] + dx, st["wy"] + dy))
+                place_polish(st["wx"] + dx, st["wy"] + dy)
 
         def release(e):
             if st["moved"]:
@@ -662,21 +669,113 @@ class FloatButton:
         cv.bind("<B1-Motion>", move)
         cv.bind("<ButtonRelease-1>", release)
 
+        # --- the sparkle button: a tap polishes the text in the box you are typing in
+        # it is fastened to the start button: always just above it (below it when there is no room), and they move together
+        gap = 6
+        pw = tk.Toplevel(root)
+        pw.overrideredirect(True)
+        pw.attributes("-topmost", True)
+        pw.configure(bg=key)
+        pw.attributes("-transparentcolor", key)
+        px, py = x, y - s - gap
+        if py < 0:
+            py = y + s + gap
+        pw.geometry("%dx%d+%d+%d" % (s, s, px, py))
+
+        def place_polish(nx, ny):
+            ty = ny - s - gap
+            if ty < 0:
+                ty = ny + s + gap
+            pw.geometry("+%d+%d" % (nx, ty))
+        pcv = tk.Canvas(pw, width=s, height=s, bg=key, highlightthickness=0, bd=0)
+        pcv.pack()
+        pw.update_idletasks()
+        pw.update()
+        phwnd = user32.GetParent(pw.winfo_id()) or pw.winfo_id()
+        pex = user32.GetWindowLongPtrW(phwnd, -20)
+        user32.SetWindowLongPtrW(phwnd, -20, pex | 0x08000000 | 0x00000080)  # no-activate, tool window
+        pst = {"x": 0, "y": 0, "wx": 0, "wy": 0, "moved": False, "until": 0.0, "drawn": None}
+
+        def draw_polish(busy):
+            pcv.delete("all")
+            m = max(4, s // 12)
+            if busy:                      # amber while it works
+                pcv.create_oval(m, m, s - m, s - m, fill="#E6A000", outline="#FFFFFF", width=3)
+                col = "#FFFFFF"
+            else:                         # pale disc, blue sparkle
+                pcv.create_oval(m, m, s - m, s - m, fill="#F2F2F2", outline="#1E64C8", width=max(4, s // 20))
+                col = "#1E64C8"
+
+            def star(cx, cy, big, small):
+                pts = [cx, cy - big, cx + small, cy - small, cx + big, cy, cx + small, cy + small,
+                       cx, cy + big, cx - small, cy + small, cx - big, cy, cx - small, cy - small]
+                pcv.create_polygon(pts, fill=col, outline="")
+
+            c = s / 2
+            star(c - s * 0.05, c + s * 0.05, s * 0.27, s * 0.07)
+            star(c + s * 0.19, c - s * 0.2, s * 0.12, s * 0.035)
+
+        def polish_home():
+            # put the sparkle button just above the start button
+            r = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            ny = r.top - s - gap
+            if ny < 0:
+                ny = r.bottom + gap
+            user32.SetWindowPos(phwnd, -1, max(0, r.left), ny, 0, 0, 0x0001 | 0x0010)
+
+        def ppress(e):
+            pst.update(x=e.x_root, y=e.y_root, wx=root.winfo_x(), wy=root.winfo_y(), moved=False)
+
+        def pmove(e):
+            # dragging the sparkle moves the start button too, and the sparkle follows it
+            dx, dy = e.x_root - pst["x"], e.y_root - pst["y"]
+            if abs(dx) + abs(dy) > 12:
+                pst["moved"] = True
+            if pst["moved"]:
+                root.geometry("+%d+%d" % (pst["wx"] + dx, pst["wy"] + dy))
+                place_polish(pst["wx"] + dx, pst["wy"] + dy)
+
+        def prelease(e):
+            if pst["moved"]:
+                try:
+                    with open(pos_file, "w") as f:
+                        f.write("%d,%d" % (root.winfo_x(), root.winfo_y()))
+                except Exception:
+                    pass
+            else:
+                pst["until"] = time.time() + float(app.s.get("polish_wait_s", "5")) + 1
+                threading.Thread(target=app.polish_now, daemon=True).start()
+
+        pcv.bind("<ButtonPress-1>", ppress)
+        pcv.bind("<B1-Motion>", pmove)
+        pcv.bind("<ButtonRelease-1>", prelease)
+
         def tick():
             try:
                 if app.state != self.drawn:
                     draw(app.state)
                     self.drawn = app.state
+                busy = time.time() < pst["until"]
+                if busy != pst["drawn"]:
+                    draw_polish(busy)
+                    pst["drawn"] = busy
                 hidden = root.state() == "withdrawn"
                 if self.shown and hidden:
                     root.deiconify()
+                    pw.deiconify()
                 elif not self.shown and not hidden:
                     root.withdraw()
+                    pw.withdraw()
                 if self.shown:
                     root.attributes("-topmost", True)
-                    if self.reset or not on_screen():
+                    pw.attributes("-topmost", True)
+                    need = self.reset or not on_screen()
+                    if need:
                         self.reset = False
                         back_to_corner()
+                    if need or not user32.MonitorFromWindow(phwnd, 0):
+                        polish_home()
             except Exception:
                 pass
             root.after(300, tick)
@@ -732,6 +831,16 @@ class App:
                                "off": "ChatRite Dictate: off (%s to start)" % self.s.get("hotkey")}[state]
         except Exception:
             pass
+
+    def polish_now(self):
+        # same signal as the spoken word "polish": ChatRite picks the file up and polishes the text box
+        try:
+            with open(os.path.join(DATA, "polish.now"), "w", encoding="utf-8") as f:
+                f.write("now")
+            log("polish asked for (button)")
+            self.out.last = "."  # the polished text ends a sentence, and the next phrase follows a space
+        except Exception as e:
+            log("polish button failed: %r" % (e,))
 
     # --- listening
     def pick_device(self):
@@ -797,6 +906,7 @@ class App:
 
     def loop(self):
         ep = Endpointer(silence_s=int(self.s.get("silence_ms", "600")) / 1000.0,
+                        min_speech_s=int(self.s.get("min_speech_ms", "300")) / 1000.0,
                         threshold=float(self.s.get("threshold", "0")))
         idle = float(self.s.get("idle_timeout_s", "90"))
         while not self.stop_flag.is_set():

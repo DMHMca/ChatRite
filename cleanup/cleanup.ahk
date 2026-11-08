@@ -345,9 +345,16 @@ Polish() {
     Cfg.Busy := true
     try
         PolishCore()
-    catch as e
+    catch as e {
+        PolishNote("stopped with an error: " SubStr(e.Message, 1, 80))
         Msg("Polish stopped: " e.Message, 5000)
+    }
     Cfg.Busy := false
+}
+
+; One line in the log saying why a polish ended. Reasons and numbers only, never the text.
+PolishNote(why) {
+    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " | polish: " why "`n", LogFile, "UTF-8")
 }
 
 PolishCore() {
@@ -368,6 +375,7 @@ PolishCore() {
         Send("^c")
         if !ClipWait(0.8) {
             A_Clipboard := saved
+            PolishNote("nothing to polish: no selection and nothing copied from the text box")
             Msg("Nothing to polish. Click in a text box with some text first.", 3000)
             return
         }
@@ -375,6 +383,7 @@ PolishCore() {
     orig := A_Clipboard
     if (StrLen(orig) > 8000) {
         A_Clipboard := saved
+        PolishNote("too much text (" StrLen(orig) " characters, the limit is 8000)")
         Msg("That is a lot of text. Select just the part you want polished, then press again.", 4500)
         return
     }
@@ -388,6 +397,8 @@ PolishCore() {
         A_Clipboard := saved
         if usedAll
             Send("{Right}")
+        why := (result = "") ? "empty answer" : "answer identical to the text"
+        PolishNote("nothing to change, " why ", " StrLen(text) " characters, " secs " s")
         Msg("Nothing to change (" secs " s)", 2500)
         return
     }
@@ -430,8 +441,10 @@ AskPolish(text) {
     if (Cfg.Engine = "cloud") {
         try
             return CloudChat(sys, text, maxOut)
-        catch as e
+        catch as e {
+            PolishNote("the cloud engine failed (" SubStr(e.Message, 1, 80) "), trying the local model")
             Msg("The cloud engine failed (" SubStr(e.Message, 1, 120) "). Using the local model instead.", 3500)
+        }
     }
     body := '{"model":' JStr(Cfg.Model) ',"stream":false,"keep_alive":"24h",'
         . '"options":{"temperature":0,"num_ctx":8192,"num_predict":' maxOut '},'
