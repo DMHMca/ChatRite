@@ -51,6 +51,8 @@ DEFAULTS = {
     "boost_quiet": "no",       # yes = raise quiet speech to a good level before recognising it
     "floating_button": "no",   # yes = a round on-screen button that starts and stops listening (for tablet mode)
     "button_size": "96",       # size of that button in pixels
+    "engine": "default",       # default = graphics card or processor; npu = the Snapdragon NPU (Surface Pro; needs npu_folder)
+    "npu_folder": "",          # the folder holding the NPU helper's own Python, the helper and its model (see surface/)
     "shared_dictionary": "",   # full path of dictionary.csv in a synced folder (Google Drive); empty = look for a ChatRite folder in My Drive
 }
 
@@ -773,7 +775,74 @@ class Engine:
         self.device = "?"
         self.names = all_names()
 
+    # --- the NPU, through a helper program running in its own native ARM64 Python (see surface/npu_helper.py)
+    def start_npu(self, say):
+        import glob
+        import struct
+        folder = self.s.get("npu_folder", "").strip()
+        py = os.path.join(folder, "nenv", "Scripts", "python.exe")
+        helper = os.path.join(folder, "npu_helper.py")
+        models = glob.glob(os.path.join(folder, "whisper_*", "*", "encoder.onnx"))
+        if not folder or not os.path.isfile(py) or not os.path.isfile(helper) or not models:
+            log("NPU engine asked for, but the NPU folder is not set up (%s)" % ("empty" if not folder else "files missing"))
+            return False
+        env = dict(os.environ, HF_HOME=os.path.join(folder, "hf"), HF_HUB_OFFLINE="1", HF_HUB_DISABLE_SYMLINKS_WARNING="1")
+        try:
+            say("Loading the speech model on the NPU...")
+            self.npu = subprocess.Popen([py, helper, os.path.dirname(models[0])], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, env=env, creationflags=0x08000000)
+            self.npu_q = queue.Queue()
+
+            def reader(p, q_):
+                try:
+                    for line in iter(p.stdout.readline, b""):
+                        q_.put(line)
+                except Exception:
+                    pass
+                q_.put(None)
+            threading.Thread(target=reader, args=(self.npu, self.npu_q), daemon=True).start()
+            first = self.npu_q.get(timeout=180)
+            if not first or b"ready" not in first:
+                raise RuntimeError("the NPU helper did not start")
+            return True
+        except Exception as e:
+            log("NPU engine failed to start: %r" % (e,))
+            self.stop_npu()
+            return False
+
+    def stop_npu(self):
+        p = getattr(self, "npu", None)
+        self.npu = None
+        if p is not None:
+            try:
+                p.kill()
+            except Exception:
+                pass
+
+    def npu_text(self, audio):
+        import struct
+        a = audio.astype("<f4").tobytes()
+        self.npu.stdin.write(struct.pack("<I", len(a) // 4) + a)
+        self.npu.stdin.flush()
+        line = self.npu_q.get(timeout=30)
+        if not line:
+            raise RuntimeError("the NPU helper stopped")
+        ans = json.loads(line.decode("utf-8"))
+        if "error" in ans:
+            raise RuntimeError(ans["error"])
+        return ans["text"].strip(), float(ans.get("logprob", 0.0))
+
     def load(self, say):
+        self.npu = None
+        if self.s.get("engine", "default").strip().lower() == "npu":
+            if self.start_npu(say):
+                self.device = "NPU"
+                log("model ready on NPU")
+                return
+            say("The NPU could not be used, so using the processor instead.")
+        self.load_normal(say)
+
+    def load_normal(self, say):
         add_cuda_dlls()
         from faster_whisper import WhisperModel
         import numpy as np
@@ -805,6 +874,18 @@ class Engine:
             peak = float(abs(audio).max()) if len(audio) else 0.0
             if 0.0 < peak < 0.3:
                 audio = (audio * (0.3 / peak)).astype("float32")
+        if getattr(self, "npu", None) is not None:
+            try:
+                text, lp = self.npu_text(audio)
+                if lp < -1.5:
+                    log("dropped a segment: logprob %.2f" % lp)
+                    return ""
+                return text
+            except Exception as e:
+                log("NPU failed (%r), switching to the processor" % (e,))
+                self.stop_npu()
+                self.device = "processor"
+                self.load_normal(lambda m: log(m))
         segs, info = self.model.transcribe(
             audio, language="en", beam_size=5, temperature=0.0,
             condition_on_previous_text=False, without_timestamps=True,
