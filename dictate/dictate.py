@@ -12,6 +12,9 @@ import sys
 import time
 import queue
 import threading
+import csv
+import io
+import shutil
 import configparser
 import subprocess
 import urllib.request
@@ -23,6 +26,8 @@ INSTALL = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), 
 UPDATE_URL = "https://dmhmca.github.io/ChatRite/dictate/"
 INI = os.path.join(DATA, "dictate.ini")
 VOCAB = os.path.join(DATA, "vocabulary.txt")
+DICT_LOCAL = os.path.join(DATA, "dictionary.csv")        # this PC's copy of the shared dictionary
+DICT_BASE = os.path.join(DATA, "dictionary.synced")      # what the two copies agreed on last time
 LOG = os.path.join(DATA, "dictate-log.txt")
 RATE = 16000
 BLOCK = 320  # 20 ms
@@ -46,6 +51,7 @@ DEFAULTS = {
     "boost_quiet": "no",       # yes = raise quiet speech to a good level before recognising it
     "floating_button": "no",   # yes = a round on-screen button that starts and stops listening (for tablet mode)
     "button_size": "96",       # size of that button in pixels
+    "shared_dictionary": "",   # full path of dictionary.csv in a synced folder (Google Drive); empty = look for a ChatRite folder in My Drive
 }
 
 
@@ -91,6 +97,157 @@ def load_vocab(path=VOCAB):
                     names.append(line)
     except Exception:
         pass
+    return names
+
+
+# --- the personal dictionary: "heard,meant" lines (the same file format Voice In exports), shared between PCs
+def parse_dictionary(text):
+    """All entries as {heard (lower case): meant}. Entries like <enter> are kept so they survive a sync."""
+    d = {}
+    try:
+        for row in csv.reader(io.StringIO(text.lstrip("﻿"))):
+            if len(row) < 2:
+                continue
+            heard = re.sub(r"\s+", " ", row[0].strip().lower()).strip(" .,")
+            meant = ",".join(row[1:]).strip() if len(row) > 2 else row[1].strip()
+            if heard and meant:
+                d[heard] = meant
+    except Exception:
+        pass
+    return d
+
+
+def write_dictionary_text(d):
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    for k in sorted(d):
+        w.writerow([k, d[k]])
+    return buf.getvalue()
+
+
+def read_dictionary(path):
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return parse_dictionary(f.read())
+    except Exception:
+        return {}
+
+
+def write_dictionary(path, d):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(write_dictionary_text(d))
+
+
+def merge_three(base, local, shared, shared_newer=True):
+    """Merge two copies of the dictionary that both started from base. A change on one side wins over no change
+    on the other (so a deletion travels too); if both changed the same word, the newer copy wins."""
+    out = {}
+    for k in set(base) | set(local) | set(shared):
+        b, l, s = base.get(k), local.get(k), shared.get(k)
+        if l == s:
+            r = l
+        elif l == b:
+            r = s
+        elif s == b:
+            r = l
+        elif l is None or s is None:
+            r = l if s is None else s
+        else:
+            r = s if shared_newer else l
+        if r is not None:
+            out[k] = r
+    return out
+
+
+def find_shared_dictionary(setting):
+    setting = (setting or "").strip()
+    if setting:
+        return setting
+    cands = []
+    for letter in "GHIJKLMNOPQRSTUVWXYZ":
+        cands.append(letter + ":\\My Drive\\ChatRite")
+    home = os.path.expanduser("~")
+    cands += [os.path.join(home, "My Drive", "ChatRite"), os.path.join(home, "Google Drive", "My Drive", "ChatRite"),
+              os.path.join(home, "Google Drive", "ChatRite")]
+    for c in cands:
+        if os.path.isdir(c):
+            return os.path.join(c, "dictionary.csv")
+    return ""
+
+
+def sync_dictionary(local, shared, base_path):
+    """Brings this PC's copy and the shared copy together. Returns 'local only', 'unavailable' or 'synced'."""
+    if not shared:
+        return "local only"
+    if not os.path.isdir(os.path.dirname(shared)):
+        return "unavailable"
+    l, s, b = read_dictionary(local), read_dictionary(shared), read_dictionary(base_path)
+    try:
+        newer = os.path.getmtime(shared) >= os.path.getmtime(local) if os.path.exists(shared) and os.path.exists(local) else True
+    except Exception:
+        newer = True
+    m = merge_three(b, l, s, newer)
+    if m != l or not os.path.exists(local):
+        write_dictionary(local, m)
+    if m != s or not os.path.exists(shared):
+        write_dictionary(shared, m)
+    if m != b:
+        write_dictionary(base_path, m)
+    return "synced"
+
+
+def active_entries(d):
+    """The entries that can be applied by this program (not the <enter>, <capitalize>, <case:...> commands)."""
+    return {k: v for k, v in d.items() if not re.fullmatch(r"<[^<>]*>", v.strip()) and k != v.strip()}
+
+
+def compile_dictionary(d):
+    """One pass over the text, longest spoken phrase first, so a replacement is never replaced again."""
+    entries = active_entries(d)
+    if not entries:
+        return None
+    keys = sorted(entries, key=len, reverse=True)
+    alt = "|".join(r"\s+".join(re.escape(w) for w in k.split()) for k in keys)
+    rx = re.compile(r"(?P<pre>\s*)(?<![A-Za-z0-9'])(?P<w>" + alt + r")(?![A-Za-z0-9'])(?P<post>[.,]?)(?P<sp>\s*)", re.I)
+    return rx, entries
+
+
+def apply_dictionary(compiled, text):
+    if not compiled or not text:
+        return text
+    rx, entries = compiled
+
+    def fix(m):
+        meant = entries.get(re.sub(r"\s+", " ", m.group("w").lower()))
+        if meant is None:
+            return m.group(0)
+        pre, post, sp = m.group("pre"), m.group("post"), m.group("sp")
+        if not re.search(r"[A-Za-z0-9]", meant):   # a spoken mark such as comma, colon, dash or slash
+            if meant in ("-", "/"):
+                return meant                          # joins the words either side
+            return meant + sp                         # sits against the word before it and takes Whisper's own stop or comma
+        if not meant[0].isalnum():                    # such as .com: sits against the word before it
+            return meant + post + sp
+        return pre + meant + post + sp
+    return rx.sub(fix, text)
+
+
+def dictionary_names(d, limit=80):
+    """Short targets worth telling Whisper about and keeping their capitals (not snippets or marks)."""
+    out = []
+    for v in active_entries(d).values():
+        v = v.strip()
+        if 1 < len(v) <= 30 and len(v.split()) <= 3 and re.search(r"[A-Za-z]", v) and not re.search(r"[<>]", v) and v not in out:
+            out.append(v)
+    return out[:limit]
+
+
+def all_names():
+    names = load_vocab()
+    for n in dictionary_names(read_dictionary(DICT_LOCAL)):
+        if n not in names:
+            names.append(n)
     return names
 
 
@@ -292,6 +449,12 @@ class Output:
         self.auto_stops = auto_stops
         self.typed = []   # what was typed, phrase by phrase, so a spoken "delete" knows how many characters to remove
         self.tail = ""    # the same text joined up (recent part only)
+        self.dictionary = None   # the compiled personal dictionary
+
+    def set_dictionary(self, d, names=None):
+        self.dictionary = compile_dictionary(d)
+        if names is not None:
+            self.names = set(n.lower() for n in names)
 
     def reset(self):
         self.last = ""
@@ -336,6 +499,7 @@ class Output:
         text = " ".join(text.split())
         # sounds in brackets or asterisks, such as [coughs] or (laughs)
         text = " ".join(re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", " ", text).split())
+        text = " ".join(apply_dictionary(self.dictionary, text).split())   # the personal dictionary
         # Whisper marks a phrase that starts or stops mid-thought with "..."; a pause is not an ellipsis.
         text = re.sub(r"^(?:\.{2,}|…)\s*", "", text)
         text = re.sub(r"\s*(?:\.{2,}|…)$", "", text)
@@ -594,7 +758,7 @@ class Engine:
         self.s = settings
         self.model = None
         self.device = "?"
-        self.names = load_vocab()
+        self.names = all_names()
 
     def load(self, say):
         add_cuda_dlls()
@@ -891,7 +1055,8 @@ class App:
         self.state = "off"
         self.button = None
         self.engine = Engine(self.s)
-        self.out = Output(load_vocab(), self.s.get("auto_stops", "no") == "yes", make_boundary(self.s))
+        self.out = Output(all_names(), self.s.get("auto_stops", "no") == "yes", make_boundary(self.s))
+        self.dict_seen = None   # (size, time) of this PC's copy when it was last loaded
         self.q = queue.Queue()
         self.listening = False
         self.busy = False
@@ -1164,6 +1329,51 @@ class App:
             if manual:
                 self.say("Could not check for updates just now.")
 
+    # --- personal dictionary, shared through a synced folder
+    def refresh_dictionary(self):
+        shared = find_shared_dictionary(self.s.get("shared_dictionary", ""))
+        try:
+            status = sync_dictionary(DICT_LOCAL, shared, DICT_BASE)
+        except Exception as e:
+            status = "sync failed"
+            log("dictionary sync failed: %r" % (e,))
+        try:
+            st = os.stat(DICT_LOCAL)
+            seen = (st.st_size, st.st_mtime)
+        except Exception:
+            seen = None
+        if seen != self.dict_seen:
+            d = read_dictionary(DICT_LOCAL)
+            names = load_vocab()
+            for n in dictionary_names(d):
+                if n not in names:
+                    names.append(n)
+            self.out.set_dictionary(d, names)
+            self.engine.names = names
+            self.dict_seen = seen
+            log("dictionary: %d entries, %d usable here (%s)" % (len(d), len(active_entries(d)), status))
+        return status
+
+    def dictionary_loop(self):
+        while True:
+            self.refresh_dictionary()
+            time.sleep(60)
+
+    def edit_dictionary(self):
+        shared = find_shared_dictionary(self.s.get("shared_dictionary", ""))
+        path = DICT_LOCAL
+        if shared and os.path.exists(shared):
+            path = shared
+        elif not os.path.exists(DICT_LOCAL):
+            try:
+                write_dictionary(DICT_LOCAL, {})
+            except Exception:
+                return
+        try:
+            subprocess.Popen(["notepad.exe", path])
+        except Exception:
+            pass
+
     def update_loop(self):
         time.sleep(20)
         while True:
@@ -1186,6 +1396,7 @@ class App:
             log("hotkey failed: %r" % (e,))
             self.say("Could not set the hotkey: %s" % e)
         threading.Thread(target=self.update_loop, daemon=True).start()
+        threading.Thread(target=self.dictionary_loop, daemon=True).start()
         if self.s.get("floating_button", "no") == "yes":
             self.button = FloatButton(self)
             threading.Thread(target=self.button.run, daemon=True).start()
@@ -1206,6 +1417,7 @@ class App:
             pystray.MenuItem("Show or hide the floating button", lambda i, it: self.toggle_button()),
             pystray.MenuItem("Bring the floating button back to the corner", lambda i, it: self.home_button()),
             pystray.MenuItem("Edit my words and names",lambda i, it: os.startfile(VOCAB) if os.path.exists(VOCAB) else None),
+            pystray.MenuItem("Edit my dictionary (shared)", lambda i, it: self.edit_dictionary()),
             pystray.MenuItem("Settings file", lambda i, it: os.startfile(INI)),
             pystray.MenuItem("Open the log folder", lambda i, it: os.startfile(DATA)),
             pystray.MenuItem("Check for updates now", lambda i, it: threading.Thread(target=self.check_update, args=(True,), daemon=True).start()),

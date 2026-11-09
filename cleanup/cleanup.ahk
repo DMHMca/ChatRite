@@ -324,6 +324,25 @@ VocabNotes() {
                 names.Push(line)
         }
     }
+    ; the shared personal dictionary (lines of: heard,meant), kept in step with the other PC by ChatRite Dictate
+    try {
+        for line in StrSplit(FileRead(DataDir "\dictionary.csv", "UTF-8"), "`n", "`r") {
+            if (names.Length + heard.Length >= 120)
+                break
+            line := Trim(line)
+            pos := InStr(line, ",")
+            if (pos < 2)
+                continue
+            hd := Trim(Trim(SubStr(line, 1, pos - 1)), '"')
+            md := Trim(Trim(SubStr(line, pos + 1)), '"')
+            if (hd = "" || md = "" || SubStr(md, 1, 1) = "<" || StrLen(md) > 40)
+                continue
+            if (hd = md)
+                names.Push(md)
+            else
+                heard.Push('the recogniser often writes "' hd '" when the speaker said "' md '"')
+        }
+    }
     out := []
     if (names.Length > 0)
         out.Push("`nThe speaker's own words and names (use exactly this spelling): " Join(names, ", ") ".")
