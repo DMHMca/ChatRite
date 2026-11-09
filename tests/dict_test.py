@@ -97,6 +97,8 @@ names = d.load_vocab(p)
 check('vocabulary keeps meant words once', names == ['Codex', 'Chrome', 'Samarkand'], names)
 pr = d.build_prompt(names, 'We went to Samarkand.')
 check('prompt carries names and previous text', 'Codex' in pr and 'We went to Samarkand.' in pr)
+check('delete lost word (misheard last) still deletes one word', d.parse_command('Delete lost word.') == ('delete_words', 1), d.parse_command('Delete lost word.'))
+check('delete lost three words', d.parse_command('delete lost three words') == ('delete_words', 3))
 # --- personal dictionary (made-up words only)
 txt = ('zorbo,Zorbax\nzorbo two,Zorbax Two\nzorbax,Zorbax\nholla,Hola\nright,right\ncaps,<capitalize>\n'
        'comma word,","\ncolon,:\ndash,-\ndot zed,.zed\nsn,"a snippet, with a comma"\nsink,"sync\n"\nmiss spelt.,Misspelt\n')
@@ -118,6 +120,8 @@ check('suffix sits against the word', ap('site dot zed') == 'site.zed', ap('site
 dd2 = d.parse_dictionary('pe,Plain English.\nzorbo,Zorbax\n'); cd2 = d.compile_dictionary(dd2)
 for said in ('PE', 'PE.', 'P.E.', 'P E', 'p-e'):
     check('abbreviation heard as %r expands once, with one stop' % said, d.apply_dictionary(cd2, said) == 'Plain English.', d.apply_dictionary(cd2, said))
+check('a number stuck to the abbreviation is kept', d.apply_dictionary(cd2, 'explain in 3PE') == 'explain in 3 Plain English.' and d.apply_dictionary(cd2, 'in 2PE.') == 'in 2 Plain English.', d.apply_dictionary(cd2, 'in 2PE.'))
+check('a number alone is left alone', d.apply_dictionary(cd2, 'there are 3 of them') == 'there are 3 of them')
 check('abbreviation does not touch real words', d.apply_dictionary(cd2, 'pet people') == 'pet people')
 check('snippet expands', ap('sn') == 'a snippet, with a comma', ap('sn'))
 check('no dictionary leaves text alone', d.apply_dictionary(None, 'zorbo') == 'zorbo')

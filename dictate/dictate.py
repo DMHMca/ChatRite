@@ -214,7 +214,7 @@ def compile_dictionary(d):
             return r"[.\s-]?".join(re.escape(c) for c in k)
         return r"\s+".join(re.escape(w) for w in k.split())
     alt = "|".join(spoken(k) for k in keys)
-    rx = re.compile(r"(?P<pre>\s*)(?<![A-Za-z0-9'])(?P<w>" + alt + r")(?![A-Za-z0-9'])(?P<post>[.,]?)(?P<sp>\s*)", re.I)
+    rx = re.compile(r"(?P<pre>\s*)(?<![A-Za-z0-9'])(?P<num>\d{1,2})?(?P<w>" + alt + r")(?![A-Za-z0-9'])(?P<post>[.,]?)(?P<sp>\s*)", re.I)
     return rx, entries
 
 
@@ -230,6 +230,10 @@ def apply_dictionary(compiled, text):
         if meant is None:
             return m.group(0)
         pre, post, sp = m.group("pre"), m.group("post"), m.group("sp")
+        if m.group("num"):   # "3PE" is "3" and then "PE" run together
+            if not re.fullmatch(r"[a-z]{2,3}", re.sub(r"[^a-z]", "", m.group("w").lower())) or not meant[0].isalnum():
+                return m.group(0)
+            pre = pre + m.group("num") + " "
         if post and meant.rstrip()[-1:] in ".,!?":
             post = ""   # the entry already ends with its own stop
         if not re.search(r"[A-Za-z0-9]", meant):   # a spoken mark such as comma, colon, dash or slash
@@ -313,7 +317,7 @@ def parse_delete(text):
         return ("undo", 0)
     if re.fullmatch(r"(?:delete|erase|remove|clear) (?:everything|all|all text|all of it)", t):
         return ("delete_all", 0)
-    m = re.fullmatch(r"(?:delete|erase|remove) (?:the )?(?:(?:last|previous|final) )?(?:(\w+) )?words?", t)
+    m = re.fullmatch(r"(?:delete|erase|remove) (?:the )?(?:(?:last|lost|lust|least|past|previous|final) )?(?:(\w+) )?words?", t)
     if m:
         w = m.group(1)
         if w is None:
