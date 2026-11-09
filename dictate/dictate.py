@@ -832,6 +832,9 @@ class Engine:
             raise RuntimeError(ans["error"])
         return ans["text"].strip(), float(ans.get("logprob", 0.0))
 
+    def ready(self):
+        return self.model is not None or getattr(self, "npu", None) is not None
+
     def load(self, say):
         self.npu = None
         if self.s.get("engine", "default").strip().lower() == "npu":
@@ -1013,7 +1016,7 @@ class FloatButton:
                         f.write("%d,%d" % (root.winfo_x(), root.winfo_y()))
                 except Exception:
                     pass
-            elif app.engine.model is not None:      # a tap, once the speech model is loaded
+            elif app.engine.ready():      # a tap, once the speech model is loaded
                 threading.Thread(target=app.toggle, daemon=True).start()
 
         cv.bind("<ButtonPress-1>", press)
@@ -1219,7 +1222,7 @@ class App:
     def start(self):
         if self.listening:
             return
-        if self.engine.model is None:
+        if not self.engine.ready():
             self.say("Still loading the speech model. Try again in a moment.")
             beep("warn", self.beeps)
             return
