@@ -97,6 +97,8 @@ names = d.load_vocab(p)
 check('vocabulary keeps meant words once', names == ['Codex', 'Chrome', 'Samarkand'], names)
 pr = d.build_prompt(names, 'We went to Samarkand.')
 check('prompt carries names and previous text', 'Codex' in pr and 'We went to Samarkand.' in pr)
+for said in ('Delete it all.', 'delete all the text', 'Deleted all', 'delete the lot', 'Delete everything'):
+    check('%r deletes everything' % said, d.parse_command(said) == ('delete_all', 0), d.parse_command(said))
 check('delete lost word (misheard last) still deletes one word', d.parse_command('Delete lost word.') == ('delete_words', 1), d.parse_command('Delete lost word.'))
 check('delete lost three words', d.parse_command('delete lost three words') == ('delete_words', 3))
 # --- personal dictionary (made-up words only)

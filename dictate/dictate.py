@@ -52,7 +52,8 @@ DEFAULTS = {
     "floating_button": "no",   # yes = a round on-screen button that starts and stops listening (for tablet mode)
     "button_size": "96",       # size of that button in pixels
     "engine": "default",       # default = graphics card or processor; npu = the Snapdragon NPU (Surface Pro; needs npu_folder)
-    "npu_folder": "",          # the folder holding the NPU helper's own Python, the helper and its model (see surface/)
+    "npu_model": "",           # base or small: which NPU model in that folder to use (small is slower, more accurate)
+    "npu_folder": "",        # the folder holding the NPU helper's own Python, the helper and its model (see surface/)
     "shared_dictionary": "",   # full path of dictionary.csv in a synced folder (Google Drive); empty = look for a ChatRite folder in My Drive
 }
 
@@ -317,7 +318,7 @@ def parse_delete(text):
         return ("select_all", 0)
     if t in ("undo", "undo that"):
         return ("undo", 0)
-    if re.fullmatch(r"(?:delete|erase|remove|clear) (?:everything|all|all text|all of it)", t):
+    if re.fullmatch(r"(?:delete|deleted|erase|remove|clear) (?:everything|all|all text|all of it|it all|all the text|the text|the lot|the whole thing)", t):
         return ("delete_all", 0)
     m = re.fullmatch(r"(?:delete|erase|remove) (?:the )?(?:(?:last|lost|lust|least|past|previous|final) )?(?:(\w+) )?words?", t)
     if m:
@@ -782,7 +783,8 @@ class Engine:
         folder = self.s.get("npu_folder", "").strip()
         py = os.path.join(folder, "nenv", "Scripts", "python.exe")
         helper = os.path.join(folder, "npu_helper.py")
-        models = glob.glob(os.path.join(folder, "whisper_*", "*", "encoder.onnx"))
+        size = self.s.get("npu_model", "").strip().lower()   # base or small; empty = whichever is there
+        models = glob.glob(os.path.join(folder, "whisper_" + (size or "*"), "*", "encoder.onnx"))
         if not folder or not os.path.isfile(py) or not os.path.isfile(helper) or not models:
             log("NPU engine asked for, but the NPU folder is not set up (%s)" % ("empty" if not folder else "files missing"))
             return False
