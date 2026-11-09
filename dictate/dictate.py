@@ -208,7 +208,12 @@ def compile_dictionary(d):
     if not entries:
         return None
     keys = sorted(entries, key=len, reverse=True)
-    alt = "|".join(r"\s+".join(re.escape(w) for w in k.split()) for k in keys)
+    def spoken(k):
+        # a short abbreviation may come out as "P.E.", "P E" or "p-e" as well as "PE"
+        if re.fullmatch(r"[a-z]{2,3}", k):
+            return r"[.\s-]?".join(re.escape(c) for c in k)
+        return r"\s+".join(re.escape(w) for w in k.split())
+    alt = "|".join(spoken(k) for k in keys)
     rx = re.compile(r"(?P<pre>\s*)(?<![A-Za-z0-9'])(?P<w>" + alt + r")(?![A-Za-z0-9'])(?P<post>[.,]?)(?P<sp>\s*)", re.I)
     return rx, entries
 
@@ -221,8 +226,12 @@ def apply_dictionary(compiled, text):
     def fix(m):
         meant = entries.get(re.sub(r"\s+", " ", m.group("w").lower()))
         if meant is None:
+            meant = entries.get(re.sub(r"[^a-z]", "", m.group("w").lower()))   # "P.E." is the entry "pe"
+        if meant is None:
             return m.group(0)
         pre, post, sp = m.group("pre"), m.group("post"), m.group("sp")
+        if post and meant.rstrip()[-1:] in ".,!?":
+            post = ""   # the entry already ends with its own stop
         if not re.search(r"[A-Za-z0-9]", meant):   # a spoken mark such as comma, colon, dash or slash
             if meant in ("-", "/"):
                 return meant                          # joins the words either side

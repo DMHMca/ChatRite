@@ -115,6 +115,10 @@ check('a spoken comma sits against the word', ap('one comma word two') == 'one, 
 check('a spoken colon takes its own stop', ap('note colon. next') == 'note: next', ap('note colon. next'))
 check('dash joins the words', ap('well dash known') == 'well-known', ap('well dash known'))
 check('suffix sits against the word', ap('site dot zed') == 'site.zed', ap('site dot zed'))
+dd2 = d.parse_dictionary('pe,Plain English.\nzorbo,Zorbax\n'); cd2 = d.compile_dictionary(dd2)
+for said in ('PE', 'PE.', 'P.E.', 'P E', 'p-e'):
+    check('abbreviation heard as %r expands once, with one stop' % said, d.apply_dictionary(cd2, said) == 'Plain English.', d.apply_dictionary(cd2, said))
+check('abbreviation does not touch real words', d.apply_dictionary(cd2, 'pet people') == 'pet people')
 check('snippet expands', ap('sn') == 'a snippet, with a comma', ap('sn'))
 check('no dictionary leaves text alone', d.apply_dictionary(None, 'zorbo') == 'zorbo')
 o3 = d.Output([]); o3.set_dictionary(dd, ['Zorbax'])
