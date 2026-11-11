@@ -1480,7 +1480,19 @@ class App:
             time.sleep(6 * 3600)
 
     # --- start-up
+    def heartbeat_loop(self):
+        # a small file touched every 15 seconds, so an outside check can tell a working Dictate from a stuck one
+        path = os.path.join(DATA, "dictate.alive")
+        while True:
+            try:
+                with open(path, "w") as f:
+                    f.write(str(int(time.time())))
+            except Exception:
+                pass
+            time.sleep(15)
+
     def background(self, icon):
+        threading.Thread(target=self.heartbeat_loop, daemon=True).start()
         icon.visible = True
         try:
             self.engine.load(self.say)
