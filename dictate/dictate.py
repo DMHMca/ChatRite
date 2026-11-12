@@ -1113,8 +1113,20 @@ class FloatButton:
         pcv.bind("<B1-Motion>", pmove)
         pcv.bind("<ButtonRelease-1>", prelease)
 
+        errs = {"n": 0, "lost": 0, "beat": 0}
+
         def tick():
             try:
+                errs["beat"] += 1
+                if errs["beat"] % 17 == 0 and self.shown:   # about every five seconds: is the window really there?
+                    if user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd):
+                        errs["lost"] = 0
+                    else:
+                        errs["lost"] += 1
+                        if errs["lost"] >= 3:
+                            log("floating button window lost, building it again")
+                            root.quit()
+                            return
                 if app.state != self.drawn:
                     draw(app.state)
                     self.drawn = app.state
@@ -1138,14 +1150,30 @@ class FloatButton:
                         back_to_corner()
                     if need or not user32.MonitorFromWindow(phwnd, 0):
                         polish_home()
-            except Exception:
-                pass
+                errs["n"] = 0
+            except Exception as e:
+                errs["n"] += 1
+                if errs["n"] == 1:
+                    log("floating button tick error: %r" % (e,))
+                if errs["n"] >= 50:   # failing every time for 15 seconds: build the window again
+                    log("floating button keeps failing, building it again")
+                    try:
+                        root.quit()
+                    except Exception:
+                        pass
+                    return
             root.after(300, tick)
 
         draw("off")
         tick()
         log("floating button shown")
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 class App:
@@ -1501,6 +1529,11 @@ class App:
             log("model load failed: %r" % (e,))
             self.say("Could not load the speech model: %s" % e)
         try:
+            import faulthandler
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            pass
+        try:
             import keyboard
             keyboard.add_hotkey(self.s.get("hotkey"), self.toggle)
         except Exception as e:
@@ -1510,7 +1543,17 @@ class App:
         threading.Thread(target=self.dictionary_loop, daemon=True).start()
         if self.s.get("floating_button", "no") == "yes":
             self.button = FloatButton(self)
-            threading.Thread(target=self.button.run, daemon=True).start()
+            threading.Thread(target=self.button_loop, daemon=True).start()
+
+    def button_loop(self):
+        # if the button's window ever goes missing or its thread ends, build it again (it used to vanish for good)
+        while True:
+            self.button.run()
+            log("floating button stopped, starting it again")
+            time.sleep(3)
+            shown = self.button.shown
+            self.button = FloatButton(self)
+            self.button.shown = shown
 
     def toggle_button(self):
         if self.button is not None:
@@ -1546,6 +1589,8 @@ def main():
         global _crash_file
         _crash_file = open(os.path.join(DATA, "dictate-crash.txt"), "a")
         faulthandler.enable(file=_crash_file, all_threads=True)
+        # if start-up has not finished in two minutes, note where every thread is stuck (cancelled once it is ready)
+        faulthandler.dump_traceback_later(120, repeat=True, file=_crash_file)
     except Exception:
         pass
     try:  # sharp, correctly sized floating button on high-resolution screens
