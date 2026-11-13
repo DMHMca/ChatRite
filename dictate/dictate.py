@@ -1192,6 +1192,7 @@ class App:
         self.icon = None
         self.selected = False   # true just after the spoken "select all"
         self.hold_until = 0.0   # nothing is typed or deleted before this time (a polish is pasting)
+        self.last_active = time.time()   # when something was last typed or a command was understood (not just noise)
         self.beeps = self.s.get("beeps", "yes") == "yes"
         self.stop_flag = threading.Event()
 
@@ -1274,6 +1275,7 @@ class App:
             beep("warn", self.beeps)
             return
         self.listening = True
+        self.last_active = time.time()
         self.worker = threading.Thread(target=self.loop, daemon=True)
         self.worker.start()
         self.set_state("listening")
@@ -1313,7 +1315,8 @@ class App:
             if blk is not None:
                 for utt in ep.feed(blk):
                     self.handle(utt)
-            if idle > 0 and not ep.in_speech and time.time() - ep.last_speech_time > idle and self.q.empty():
+            # "quiet" means nothing was understood: a fan, a television or a clatter must not keep it switched on
+            if idle > 0 and not ep.in_speech and not self.busy and time.time() - self.last_active > idle and self.q.empty():
                 self.say("Switched off after %d seconds of quiet." % idle)
                 self.stop("timed out")
                 return
@@ -1376,6 +1379,8 @@ class App:
             if wait > 0:
                 time.sleep(wait)   # a polish is still pasting: do not type or delete on top of it
             cmd = parse_command(text) if text else None
+            if cmd:
+                self.last_active = time.time()
             if self.selected and not (cmd and cmd[0] in ("delete_that", "select_all")):
                 # typing or another command replaces the selection, so what was typed before is gone
                 self.selected = False
@@ -1411,6 +1416,7 @@ class App:
                 if typed:
                     type_text(typed)
                     self.out.remember(typed)
+                    self.last_active = time.time()
             log("phrase %.1fs of speech, %.2fs to recognise, %d characters" % (len(audio) / RATE, secs, len(text)))
         except Exception as e:
             log("phrase failed: %r" % (e,))
