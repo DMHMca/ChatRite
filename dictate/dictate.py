@@ -1259,16 +1259,25 @@ class App:
             return
         import sounddevice as sd
         self.out.reset()
-        self.stop_flag.clear()
-        self.q = queue.Queue()
+        # every listening session gets its own flag and queue, so a loop still finishing a phrase after "off" can
+        # never share sound with the loop of the next "on" (two loops each hearing alternate scraps heard nothing)
+        self.stop_flag = threading.Event()
+        flag = self.stop_flag
+        q = queue.Queue()
+        self.q = q
 
         def cb(indata, frames, t, status):
-            self.q.put(indata[:, 0].copy())
+            q.put(indata[:, 0].copy())
 
         try:
             self.stream = sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=BLOCK,
                                          device=self.pick_device(), callback=cb)
             self.stream.start()
+            try:
+                self.mic_name = sd.query_devices(self.stream.device)["name"]
+            except Exception:
+                self.mic_name = "?"
+            log("microphone: %s" % self.mic_name)
         except Exception as e:
             log("microphone failed: %r" % (e,))
             self.say("Could not open the microphone: %s" % e)
@@ -1276,7 +1285,7 @@ class App:
             return
         self.listening = True
         self.last_active = time.time()
-        self.worker = threading.Thread(target=self.loop, daemon=True)
+        self.worker = threading.Thread(target=self.loop, args=(q, flag), daemon=True)
         self.worker.start()
         self.set_state("listening")
         beep("on", self.beeps)
@@ -1302,23 +1311,35 @@ class App:
         else:
             self.start()
 
-    def loop(self):
+    def loop(self, q, stop_flag):
         ep = Endpointer(silence_s=int(self.s.get("silence_ms", "600")) / 1000.0,
                         min_speech_s=int(self.s.get("min_speech_ms", "300")) / 1000.0,
                         threshold=float(self.s.get("threshold", "0")))
         idle = float(self.s.get("idle_timeout_s", "90"))
-        while not self.stop_flag.is_set():
+        t_on, heard, warned = time.time(), 0, False
+        while not stop_flag.is_set():
             try:
-                blk = self.q.get(timeout=0.2)
+                blk = q.get(timeout=0.2)
             except queue.Empty:
                 blk = None
             if blk is not None:
+                if float((blk * blk).mean()) > 4e-6:   # a block with any real sound in it (about 0.002 of full scale)
+                    heard += 1
+            if not warned and time.time() - t_on > 15 and heard < 5:
+                # Windows can quietly switch the default microphone to something that is not plugged into anything
+                warned = True
+                log("no sound from the microphone in 15 seconds (%s)" % getattr(self, "mic_name", "?"))
+                self.say("No sound from the microphone (%s). Check which microphone Windows is using." % getattr(self, "mic_name", "?"))
+            if blk is not None:
                 for utt in ep.feed(blk):
+                    if stop_flag.is_set():
+                        break          # switched off while the phrase was being cut: do not type it
                     self.handle(utt)
             # "quiet" means nothing was understood: a fan, a television or a clatter must not keep it switched on
-            if idle > 0 and not ep.in_speech and not self.busy and time.time() - self.last_active > idle and self.q.empty():
+            if idle > 0 and not ep.in_speech and not self.busy and time.time() - self.last_active > idle and q.empty():
                 self.say("Switched off after %d seconds of quiet." % idle)
-                self.stop("timed out")
+                if not stop_flag.is_set():
+                    self.stop("timed out")
                 return
 
     def do_delete(self, cmd):
